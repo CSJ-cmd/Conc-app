@@ -6,8 +6,9 @@ import pandas as pd
 def get_angle_correction(R_val, angle):
     """
     [타격 방향 보정]
-    - 사진의 표와 동일하게 R값 구간별 보정치를 적용
-    - 보정치를 더하는 방식 (하향은 양수라 더해지고, 상향은 음수라 빼짐)
+    - R값 구간별 보정치를 Step 방식(계단식)으로 적용
+    - 입력된 R값보다 작거나 같은 기준값 중 가장 큰 기준값의 보정치를 선택
+    - 예: 하향(-90)일 때 R=55이면 -> 50의 보정값(+2.2) 적용
     """
     correction_table = {
         -90: {20: +3.2, 30: +3.1, 40: +2.7, 50: +2.2, 60: +1.7}, # 하향
@@ -17,22 +18,27 @@ def get_angle_correction(R_val, angle):
         90:  {20: -5.4, 30: -4.7, 40: -3.9, 50: -3.1, 60: -2.3}  # 상향
     }
     
-    if angle not in correction_table: angle = 0
+    # 1. 해당 각도의 테이블 가져오기
+    if angle not in correction_table:
+        return 0.0
+    
     data = correction_table[angle]
+    
+    # 2. 기준값(키) 오름차순 정렬 (20, 30, 40, 50, 60)
     sorted_keys = sorted(data.keys())
     
-    # 범위 밖 처리
-    if R_val <= sorted_keys[0]: return data[sorted_keys[0]]
-    if R_val >= sorted_keys[-1]: return data[sorted_keys[-1]]
+    # 3. Step 방식 적용 로직
+    # 기본값은 가장 작은 키(20)의 값으로 설정
+    target_key = sorted_keys[0] 
     
-    # 선형 보간
-    for i in range(len(sorted_keys) - 1):
-        r1, r2 = sorted_keys[i], sorted_keys[i+1]
-        if r1 <= R_val <= r2:
-            v1, v2 = data[r1], data[r2]
-            ratio = (R_val - r1) / (r2 - r1)
-            return v1 + ratio * (v2 - v1)
-    return 0.0
+    for key in sorted_keys:
+        if R_val >= key:
+            target_key = key
+        else:
+            # 입력값보다 큰 키를 만나는 순간 루프 종료 (직전 키가 정답)
+            break
+            
+    return data[target_key]
 
 def get_age_coefficient(days):
     """
@@ -62,7 +68,7 @@ def get_age_coefficient(days):
     if days >= sorted_days[-1]:
         return age_table[sorted_days[-1]]
     
-    # 2. 10일 미만은 1.25 (또는 그 이상) 적용
+    # 2. 10일 미만은 가장 작은 값 적용 (혹은 별도 처리)
     if days <= sorted_days[0]:
         return age_table[sorted_days[0]]
     
@@ -171,14 +177,11 @@ if st.button("🚀 강도 산정하기", type="primary", use_container_width=Tru
                 
                 # 적용 기준 확인용 (Expandable)
                 with st.expander("ℹ️ 적용된 보정 기준표 확인하기"):
-                    st.markdown("**1. 재령 보정 계수표 (입력값에 따라 보간 적용)**")
-                    age_df = pd.DataFrame({
-                        "재령일수": [10, 20, 28, 50, 90, 365, 500, 1000, 3000],
-                        "보정계수": [1.25, 1.15, 1.00, 0.87, 0.80, 0.70, 0.67, 0.65, 0.63]
-                    })
-                    st.dataframe(age_df, hide_index=True, use_container_width=True)
-                    
-                    st.markdown("**2. 상세 산정 정보**")
+                    st.markdown("**1. 타격 방향 보정 (Step 방식 적용)**")
+                    st.info("R값 구간: 입력값보다 작거나 같은 기준값 중 가장 큰 값을 적용 (예: R=55 → 기준 50 적용)")
+
+                    st.markdown("**2. 재령 보정 계수표 (입력값에 따라 보간 적용)**")
+                    # (화면 표시용 데이터프레임 생성 부분은 생략하거나 필요 시 추가 가능)
                     st.write(f"- 유효 데이터: {len(valid)}개 (기각: {len(readings)-len(valid)}개)")
                     st.write(f"- 1차 평균: {avg1:.2f}")
 
