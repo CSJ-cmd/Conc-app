@@ -13,7 +13,7 @@ except ImportError:
     st.error("OCR 라이브러리가 설치되지 않았습니다. 'pip install easyocr opencv-python-headless'를 실행해주세요.")
 
 # =========================================================
-# 1. 페이지 기본 설정 및 스타일 (모바일 최적화 CSS 강화)
+# 1. 페이지 기본 설정 및 스타일 (좌측 겹침 해결 CSS 적용)
 # =========================================================
 st.set_page_config(
     page_title="구조물 안전진단 통합 평가 Pro",
@@ -24,12 +24,22 @@ st.set_page_config(
 
 st.markdown("""
     <style>
-    /* 탭 스타일 개선: 모바일에서 스크롤 화살표 겹침 방지 */
+    /* [수정 1] 전체 페이지 좌우 여백 확보 (모바일 겹침 방지 핵심) */
+    .block-container {
+        padding-top: 1rem !important;
+        padding-bottom: 5rem !important;
+        padding-left: 1.5rem !important; /* 좌측 여백 충분히 확보 */
+        padding-right: 1.5rem !important;
+        max-width: 100% !important;
+    }
+
+    /* [수정 2] 탭 스타일 개선 */
     .stTabs [data-baseweb="tab-list"] {
         gap: 8px;
-        overflow-x: auto; /* 가로 스크롤 허용 */
-        white-space: nowrap; /* 탭 줄바꿈 방지 */
-        scrollbar-width: none; /* 스크롤바 숨김 (미관상) */
+        overflow-x: auto;
+        white-space: nowrap;
+        scrollbar-width: none;
+        padding-left: 2px; /* 탭 좌측 잘림 방지 */
     }
     .stTabs [data-baseweb="tab"] {
         height: 45px;
@@ -39,7 +49,26 @@ st.markdown("""
         font-size: 14px;
     }
     
-    /* 메트릭(수치) 텍스트 크기 및 줄바꿈 조정 */
+    /* [수정 3] Expander(지침) 제목 겹침 방지 */
+    div[data-testid="stExpander"] summary {
+        padding-left: 10px !important;  /* 아이콘과 텍스트 간격 확보 */
+        padding-right: 10px !important;
+        height: auto !important;
+        min-height: 3rem;
+        white-space: normal !important; /* 줄바꿈 허용 */
+        display: flex;
+        align-items: center;
+    }
+    
+    /* Expander 내부 폰트 조정 */
+    div[data-testid="stExpander"] summary p {
+        font-size: 15px;
+        font-weight: 600;
+        margin: 0;
+        line-height: 1.4; /* 줄 간격 확보 */
+    }
+
+    /* 메트릭(수치) 스타일 */
     [data-testid="stMetricValue"] {
         font-size: 1.1rem !important;
         word-break: break-all;
@@ -60,25 +89,8 @@ st.markdown("""
         margin-bottom: 15px;
     }
     
-    /* 모바일 표 가로 스크롤 허용 */
+    /* 모바일 표 가로 스크롤 */
     div[data-testid="stTable"] { overflow-x: auto; }
-
-    /* [수정됨] Expander(지침) 헤더 겹침 방지 및 줄바꿈 허용 */
-    div[data-testid="stExpander"] summary {
-        height: auto !important; /* 높이 고정 해제 */
-        min-height: 3rem; /* 최소 높이 확보 */
-        white-space: normal !important; /* 텍스트 줄바꿈 허용 */
-        padding-right: 30px; /* 화살표 아이콘 공간 확보 */
-        display: flex;
-        align-items: center; /* 세로 중앙 정렬 */
-    }
-    
-    /* Expander 내부 텍스트 폰트 조정 */
-    div[data-testid="stExpander"] summary p {
-        font-size: 15px;
-        font-weight: 600;
-        margin-bottom: 0px;
-    }
     </style>
 """, unsafe_allow_html=True)
 
@@ -174,22 +186,18 @@ with st.sidebar:
 tab1, tab2, tab3, tab4 = st.tabs(["📖 점검 매뉴얼", "🔨 반발경도", "🧪 탄산화", "📈 통계·비교"])
 
 # ---------------------------------------------------------
-# [Tab 1] 점검 매뉴얼 (기존 내용 유지)
+# [Tab 1] 점검 매뉴얼 (기존 유지)
 # ---------------------------------------------------------
 with tab1:
     st.subheader("💡 프로그램 사용 가이드")
     st.info("""
     **1. 반발경도 산정 시 설계기준강도를 입력해주세요.**
     * 설계기준강도를 바탕으로 압축강도 추정에 필요한 공식 적용 로직이 자동으로 변경됩니다.
-    
     **2. 타격방향 보정 값을 매뉴얼을 참고해서 상향 타격인지 하향타격인지를 구분해서 선택해주세요.**
-    
     **3. 재령 등 별도로 적용하지 않을 시 프로그램상에서 재령 3000일, 설계기준강도 24MPa가 적용됩니다.**
-    
     **4. 통계ㆍ비교 탭 활용 안내**
     * 추정된 압축강도의 표준편차와 변동계수 등을 계산하여 해당 시설물에 가장 적합한 산정식을 확인하고 검토하기 위함입니다.
     """)
-    
     st.divider()
     st.subheader("📋 시설물 안전점검·진단 세부지침 매뉴얼")
 
@@ -268,7 +276,6 @@ with tab2:
             if ok:
                 st.success(f"평균 추정 압축강도: **{res['Mean_Strength']:.2f} MPa**")
                 
-                # [모바일 최적화] 4열 -> 2열 x 2행 배치
                 with st.container(border=True):
                     r1, r2 = st.columns(2)
                     with r1: st.metric("유효 평균 R", f"{res['R_avg']:.1f}")
