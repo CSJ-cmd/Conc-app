@@ -13,7 +13,7 @@ except ImportError:
     st.error("OCR 라이브러리가 설치되지 않았습니다. 'pip install easyocr opencv-python-headless'를 실행해주세요.")
 
 # =========================================================
-# 1. 페이지 기본 설정 및 스타일 (모바일/브라우저 호환성 CSS 강화)
+# 1. 페이지 기본 설정 및 스타일 (크로스 브라우저 호환성 강화)
 # =========================================================
 st.set_page_config(
     page_title="구조물 안전진단 통합 평가 Pro",
@@ -24,7 +24,7 @@ st.set_page_config(
 
 st.markdown("""
     <style>
-    /* 1. 전체 페이지 좌우 여백 확보 */
+    /* 1. 전체 페이지 좌우 여백 확보 (모바일 안전 영역) */
     .block-container {
         padding-top: 1rem !important;
         padding-bottom: 5rem !important;
@@ -33,13 +33,17 @@ st.markdown("""
         max-width: 100% !important;
     }
 
-    /* 2. 탭 스타일 개선 (가로 스크롤) */
+    /* 2. 탭 스타일 개선 (가로 스크롤 및 탭 줄바꿈 방지) */
     .stTabs [data-baseweb="tab-list"] {
         gap: 8px;
         overflow-x: auto;
         white-space: nowrap;
-        scrollbar-width: none;
+        scrollbar-width: none; /* 파이어폭스 스크롤 숨김 */
+        -ms-overflow-style: none; /* IE/Edge 스크롤 숨김 */
         padding-left: 2px;
+    }
+    .stTabs [data-baseweb="tab-list"]::-webkit-scrollbar {
+        display: none; /* 크롬/사파리 스크롤 숨김 */
     }
     .stTabs [data-baseweb="tab"] {
         height: 45px;
@@ -49,42 +53,47 @@ st.markdown("""
         font-size: 14px;
     }
     
-    /* [핵심 수정] Expander(지침) 삼성 인터넷 호환성 패치 */
+    /* [핵심 수정] Expander(지침) 모바일 크로스 브라우저 호환성 패치 */
     
-    /* 3-1. 브라우저 기본 화살표(Marker) 강제 숨김 */
+    /* 3-1. Flexbox로 아이콘과 텍스트 영역 강제 분리 */
     div[data-testid="stExpander"] details > summary {
-        list-style: none !important; /* 표준 스타일 제거 */
-        display: flex !important;
-        align-items: flex-start !important;
-        padding-top: 10px !important;
-        padding-bottom: 10px !important;
+        list-style: none !important; /* 표준 마커 제거 */
+        display: flex !important;    /* Flex 레이아웃 적용 */
+        align-items: flex-start !important; /* 상단 정렬 */
+        padding: 10px !important;
         height: auto !important;
-        min-height: 3rem;
+        min-height: 40px;
+        border: 1px solid #f0f2f6;
+        border-radius: 8px;
     }
     
-    /* 3-2. Webkit 기반 브라우저(크롬, 삼성인터넷) 강제 숨김 */
+    /* 3-2. 안드로이드/아이폰(Webkit) 기본 화살표 숨김 */
     div[data-testid="stExpander"] details > summary::-webkit-details-marker {
         display: none !important;
     }
 
-    /* 4. Streamlit 화살표 아이콘(SVG) 위치 및 크기 고정 */
+    /* 4. Streamlit SVG 아이콘 위치 고정 (겹침 방지 핵심) */
     div[data-testid="stExpander"] details > summary > svg {
         margin-right: 12px !important;
-        margin-top: 4px !important;
+        margin-top: 3px !important; /* 텍스트 첫 줄과 높이 맞춤 */
         width: 18px !important;
+        min-width: 18px !important; /* 아이폰에서 찌그러짐 방지 */
         height: 18px !important;
-        flex-shrink: 0 !important; /* 찌그러짐 방지 */
+        flex-shrink: 0 !important;  /* 절대 줄어들지 않음 */
         display: block !important;
+        position: static !important; /* 절대 위치 제거 */
+        transform: none !important;
     }
     
-    /* 5. 텍스트 줄바꿈 허용 */
+    /* 5. 텍스트 줄바꿈 및 레이아웃 제어 */
     div[data-testid="stExpander"] details > summary p {
         font-size: 15px;
         font-weight: 600;
         margin: 0;
         line-height: 1.5;
-        white-space: normal !important;
-        word-break: keep-all; 
+        white-space: normal !important;    /* 줄바꿈 허용 */
+        word-break: keep-all;              /* 한글 단어 단위 줄바꿈 */
+        flex-grow: 1;                      /* 남은 공간 모두 차지 */
     }
 
     /* 메트릭(수치) 스타일 */
@@ -209,11 +218,8 @@ with tab1:
     st.info("""
     **1. 반발경도 산정 시 설계기준강도를 입력해주세요.**
     * 설계기준강도를 바탕으로 압축강도 추정에 필요한 공식 적용 로직이 자동으로 변경됩니다.
-    
     **2. 타격방향 보정 값을 매뉴얼을 참고해서 상향 타격인지 하향타격인지를 구분해서 선택해주세요.**
-    
     **3. 재령 등 별도로 적용하지 않을 시 프로그램상에서 재령 3000일, 설계기준강도 24MPa가 적용됩니다.**
-    
     **4. 통계ㆍ비교 탭 활용 안내**
     * 추정된 압축강도의 표준편차와 변동계수 등을 계산하여 해당 시설물에 가장 적합한 산정식을 확인하고 검토하기 위함입니다.
     """)
