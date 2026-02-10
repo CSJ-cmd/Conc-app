@@ -13,7 +13,7 @@ except ImportError:
     st.error("OCR 라이브러리가 설치되지 않았습니다. 'pip install easyocr opencv-python-headless'를 실행해주세요.")
 
 # =========================================================
-# 1. 페이지 기본 설정 및 스타일
+# 1. 페이지 기본 설정 및 스타일 (모바일 최적화 CSS 적용)
 # =========================================================
 st.set_page_config(
     page_title="구조물 안전진단 통합 평가 Pro",
@@ -24,25 +24,56 @@ st.set_page_config(
 
 st.markdown("""
     <style>
-    .stTabs [data-baseweb="tab-list"] { gap: 2px; }
-    .stTabs [data-baseweb="tab"] {
-        height: 50px; white-space: pre-wrap; background-color: #f0f2f6;
-        border-radius: 4px 4px 0px 0px; gap: 1px; padding-top: 10px; padding-bottom: 10px;
+    /* 탭 스타일 개선: 모바일에서 스크롤 화살표 겹침 방지 */
+    .stTabs [data-baseweb="tab-list"] {
+        gap: 8px;
+        overflow-x: auto; /* 가로 스크롤 허용 */
+        white-space: nowrap; /* 탭 줄바꿈 방지 */
+        scrollbar-width: none; /* 스크롤바 숨김 (미관상) */
     }
-    [data-testid="stMetricValue"] { font-size: 1.2rem !important; }
-    .calc-box { background-color: #f8f9fa; padding: 15px; border-radius: 10px; border-left: 5px solid #1f77b4; margin-bottom: 15px; }
+    .stTabs [data-baseweb="tab"] {
+        height: 45px;
+        padding: 5px 15px;
+        background-color: #f0f2f6;
+        border-radius: 8px 8px 0px 0px;
+        font-size: 14px;
+    }
+    
+    /* 메트릭(수치) 텍스트 크기 및 줄바꿈 조정 */
+    [data-testid="stMetricValue"] {
+        font-size: 1.1rem !important;
+        word-break: break-all;
+    }
+    [data-testid="stMetricLabel"] {
+        font-size: 0.9rem !important;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+    }
+
+    /* 계산 박스 스타일 */
+    .calc-box {
+        background-color: #f8f9fa;
+        padding: 15px;
+        border-radius: 10px;
+        border-left: 5px solid #1f77b4;
+        margin-bottom: 15px;
+    }
+    
+    /* 모바일 표 가로 스크롤 허용 */
+    div[data-testid="stTable"] { overflow-x: auto; }
     </style>
 """, unsafe_allow_html=True)
 
 # =========================================================
-# 2. 전역 함수 정의
+# 2. 전역 함수 정의 (기존 로직 100% 유지)
 # =========================================================
 
-# [NEW] OCR 처리 함수
+# OCR 처리 함수
 @st.cache_resource
 def load_ocr_reader():
     """EasyOCR 모델 로드 (캐싱 적용)"""
-    return easyocr.Reader(['en']) # 숫자는 영어 모델로 충분
+    return easyocr.Reader(['en']) 
 
 def extract_numbers_from_image(image_input):
     """이미지에서 숫자 추출"""
@@ -50,14 +81,12 @@ def extract_numbers_from_image(image_input):
         reader = load_ocr_reader()
         image = Image.open(image_input)
         image_np = np.array(image)
-        # 숫자와 점(.)만 인식하도록 설정
         result = reader.readtext(image_np, detail=0, allowlist='0123456789. ')
         return " ".join(result)
     except Exception as e:
         return ""
 
 def get_angle_correction(R_val, angle):
-    """ 타격 방향 보정값 (세부지침 기준) """
     try: angle = int(angle)
     except: angle = 0
     correction_table = {
@@ -77,14 +106,9 @@ def get_angle_correction(R_val, angle):
     return data[target_key]
 
 def get_age_coefficient(days):
-    """ 재령 보정계수 (지침 기준, 기본값 3000일 적용) """
     try: days = float(days)
     except: days = 3000.0
-    age_table = {
-        10: 1.55, 20: 1.12, 28: 1.00, 50: 0.87,
-        100: 0.78, 150: 0.74, 200: 0.72, 300: 0.70,
-        500: 0.67, 1000: 0.65, 3000: 0.63
-    }
+    age_table = {10: 1.55, 20: 1.12, 28: 1.00, 50: 0.87, 100: 0.78, 150: 0.74, 200: 0.72, 300: 0.70, 500: 0.67, 1000: 0.65, 3000: 0.63}
     sorted_days = sorted(age_table.keys())
     if days >= sorted_days[-1]: return age_table[sorted_days[-1]]
     if days <= sorted_days[0]: return age_table[sorted_days[0]]
@@ -96,7 +120,6 @@ def get_age_coefficient(days):
     return 1.0
 
 def calculate_strength(readings, angle, days, design_fck=24.0):
-    """ 반발경도 강도 산정 메인 로직 """
     if not readings or len(readings) < 5: return False, "데이터 부족"
     avg1 = sum(readings) / len(readings)
     valid = [r for r in readings if avg1 * 0.8 <= r <= avg1 * 1.2]
@@ -134,18 +157,15 @@ with st.sidebar:
 tab1, tab2, tab3, tab4 = st.tabs(["📖 점검 매뉴얼", "🔨 반발경도", "🧪 탄산화", "📈 통계·비교"])
 
 # ---------------------------------------------------------
-# [Tab 1] 점검 매뉴얼 (기존 유지)
+# [Tab 1] 점검 매뉴얼 (기존 내용 유지)
 # ---------------------------------------------------------
 with tab1:
     st.subheader("💡 프로그램 사용 가이드")
     st.info("""
     **1. 반발경도 산정 시 설계기준강도를 입력해주세요.**
     * 설계기준강도를 바탕으로 압축강도 추정에 필요한 공식 적용 로직이 자동으로 변경됩니다.
-    
     **2. 타격방향 보정 값을 매뉴얼을 참고해서 상향 타격인지 하향타격인지를 구분해서 선택해주세요.**
-    
     **3. 재령 등 별도로 적용하지 않을 시 프로그램상에서 재령 3000일, 설계기준강도 24MPa가 적용됩니다.**
-    
     **4. 통계ㆍ비교 탭 활용 안내**
     * 추정된 압축강도의 표준편차와 변동계수 등을 계산하여 해당 시설물에 가장 적합한 산정식을 확인하고 검토하기 위함입니다.
     """)
@@ -195,14 +215,13 @@ with tab1:
         """)
 
 # ---------------------------------------------------------
-# [Tab 2] 반발경도 평가 (OCR 기능 추가)
+# [Tab 2] 반발경도 평가 (OCR 포함, 모바일 레이아웃 최적화)
 # ---------------------------------------------------------
 with tab2:
     st.subheader("🔨 반발경도 정밀 강도 산정")
     mode = st.radio("입력 방식", ["단일 지점", "다중 지점 (Batch/File)"], horizontal=True)
     if mode == "단일 지점":
         with st.container(border=True):
-            # [NEW] 카메라 입력 및 OCR 섹션
             with st.expander("📸 카메라로 측정값 자동 입력 (Click)", expanded=False):
                 img_file = st.camera_input("측정 기록표를 촬영하세요")
                 if img_file is not None:
@@ -212,18 +231,15 @@ with tab2:
                             st.session_state['ocr_result'] = recognized_text
                             st.success("인식 성공! 아래 입력창을 확인하세요.")
                         else:
-                            st.warning("숫자를 인식하지 못했습니다. 다시 촬영하거나 직접 입력해주세요.")
+                            st.warning("숫자를 인식하지 못했습니다.")
 
             c1, c2, c3 = st.columns(3)
             with c1: angle = st.selectbox("타격 방향", [90, 45, 0, -45, -90], format_func=lambda x: {90:"+90°(상향수직)", 45:"+45°(상향경사)", 0:"0°(수평)", -45:"-45°(하향경사)", -90:"-90°(하향수직)"}[x])
             with c2: days = st.number_input("재령(일)", 10, 10000, 3000)
             with c3: fck = st.number_input("설계강도(MPa)", 15.0, 100.0, 24.0)
             
-            # OCR 결과가 있으면 적용, 없으면 기본값
             default_txt = "54 56 55 53 58 55 54 55 52 57 55 56 54 55 59 42 55 56 54 55"
-            if 'ocr_result' in st.session_state:
-                default_txt = st.session_state['ocr_result']
-                
+            if 'ocr_result' in st.session_state: default_txt = st.session_state['ocr_result']
             txt = st.text_area("측정값 (공백/줄바꿈 구분)", value=default_txt, height=80)
             
         if st.button("계산 실행", type="primary", use_container_width=True):
@@ -231,9 +247,16 @@ with tab2:
             ok, res = calculate_strength(rd, angle, days, fck)
             if ok:
                 st.success(f"평균 추정 압축강도: **{res['Mean_Strength']:.2f} MPa**")
+                
+                # [모바일 최적화] 4열 -> 2열 x 2행 배치를 통해 가독성 확보
                 with st.container(border=True):
-                    m1, m2, m3, m4 = st.columns(4)
-                    m1.metric("유효 평균 R", f"{res['R_avg']:.1f}"); m2.metric("각도 보정", f"{res['Angle_Corr']:+.1f}"); m3.metric("최종 R₀", f"{res['R0']:.1f}"); m4.metric("재령 계수 α", f"{res['Age_Coeff']:.2f}")
+                    r1, r2 = st.columns(2)
+                    with r1: st.metric("유효 평균 R", f"{res['R_avg']:.1f}")
+                    with r2: st.metric("각도 보정", f"{res['Angle_Corr']:+.1f}")
+                    r3, r4 = st.columns(2)
+                    with r3: st.metric("최종 R₀", f"{res['R0']:.1f}")
+                    with r4: st.metric("재령 계수 α", f"{res['Age_Coeff']:.2f}")
+
                 df_f = pd.DataFrame({"공식": res["Formulas"].keys(), "강도": res["Formulas"].values()})
                 chart = alt.Chart(df_f).mark_bar().encode(x=alt.X('공식', sort=None), y='강도', color=alt.condition(alt.datum.강도 >= fck, alt.value('#4D96FF'), alt.value('#FF6B6B'))).properties(height=350)
                 st.altair_chart(chart + alt.Chart(pd.DataFrame({'y': [fck]})).mark_rule(color='red', strokeDash=[5, 3], size=2).encode(y='y'), use_container_width=True)
@@ -269,7 +292,7 @@ with tab2:
                 with res_tab2: st.dataframe(final_df, use_container_width=True, hide_index=True)
 
 # ---------------------------------------------------------
-# [Tab 3] 탄산화 평가 (기존 유지)
+# [Tab 3] 탄산화 평가 (기존 유지: 지표 상단 -> 그래프 하단)
 # ---------------------------------------------------------
 with tab3:
     st.subheader("🧪 탄산화 깊이 및 상세 분석")
@@ -279,8 +302,8 @@ with tab3:
         with c2: d_cover = st.number_input("설계 피복(mm)", 10.0, 200.0, 40.0)
         with c3: a_years = st.number_input("경과 년수(년)", 1, 100, 20)
     if st.button("평가 실행", type="primary", key="btn_carb_run", use_container_width=True):
-        rem = d_cover - m_depth
         rate_a = m_depth / math.sqrt(a_years) if a_years > 0 else 0
+        rem = d_cover - m_depth
         total_life = (d_cover / rate_a)**2 if rate_a > 0 else 99.9
         res_life = total_life - a_years
         grade, color = ("A", "green") if rem >= 30 else (("B", "blue") if rem >= 10 else (("C", "orange") if rem >= 0 else ("D", "red")))
@@ -302,7 +325,7 @@ with tab3:
         st.altair_chart(line + rule + point, use_container_width=True)
 
 # ---------------------------------------------------------
-# [Tab 4] 통계 및 비교 (기존 유지)
+# [Tab 4] 통계 및 비교 (기존 유지: 40MPa 필터링)
 # ---------------------------------------------------------
 with tab4:
     st.subheader("📊 강도 통계 및 비교 분석")
@@ -320,6 +343,7 @@ with tab4:
             if len(data) >= 2:
                 avg_v, std_v = np.mean(data), np.std(data, ddof=1)
                 with st.container(border=True):
+                    # [모바일 최적화] 통계도 공간 확보를 위해 글자 크기 CSS 적용됨
                     m1, m2, m3 = st.columns(3)
                     m1.metric("평균", f"{avg_v:.2f} MPa", delta=f"{(avg_v/st_fck*100):.1f}%"); m2.metric("표준편차 (σ)", f"{std_v:.2f} MPa"); m3.metric("변동계수 (CV)", f"{(std_v/avg_v*100):.1f}%")
                 st.altair_chart(alt.Chart(pd.DataFrame({"번호": range(1, len(data)+1), "강도": data})).mark_bar().encode(x='번호:O', y='강도:Q', color=alt.condition(alt.datum.강도 >= st_fck, alt.value('#4D96FF'), alt.value('#FF6B6B'))) + alt.Chart(pd.DataFrame({'y':[st_fck]})).mark_rule(color='red', strokeDash=[5,3], size=2).encode(y='y'), use_container_width=True)
