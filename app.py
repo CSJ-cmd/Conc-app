@@ -13,7 +13,7 @@ except ImportError:
     st.error("OCR 라이브러리가 설치되지 않았습니다. 'pip install easyocr opencv-python-headless'를 실행해주세요.")
 
 # =========================================================
-# 1. 페이지 기본 설정 및 스타일 (화살표 겹침 해결 CSS 적용)
+# 1. 페이지 기본 설정 및 스타일 (모바일/브라우저 호환성 CSS 강화)
 # =========================================================
 st.set_page_config(
     page_title="구조물 안전진단 통합 평가 Pro",
@@ -49,34 +49,42 @@ st.markdown("""
         font-size: 14px;
     }
     
-    /* [핵심 수정] Expander(지침) 화살표 겹침 완벽 해결 */
+    /* [핵심 수정] Expander(지침) 삼성 인터넷 호환성 패치 */
+    
+    /* 3-1. 브라우저 기본 화살표(Marker) 강제 숨김 */
     div[data-testid="stExpander"] details > summary {
-        display: flex !important;          /* 플렉스 박스로 설정 */
-        align-items: flex-start !important; /* 텍스트가 길 경우 상단 정렬 */
+        list-style: none !important; /* 표준 스타일 제거 */
+        display: flex !important;
+        align-items: flex-start !important;
         padding-top: 10px !important;
         padding-bottom: 10px !important;
-        height: auto !important;           /* 높이 자동 조절 */
+        height: auto !important;
         min-height: 3rem;
     }
+    
+    /* 3-2. Webkit 기반 브라우저(크롬, 삼성인터넷) 강제 숨김 */
+    div[data-testid="stExpander"] details > summary::-webkit-details-marker {
+        display: none !important;
+    }
 
-    /* 화살표 아이콘(SVG) 스타일 강제 조정 */
+    /* 4. Streamlit 화살표 아이콘(SVG) 위치 및 크기 고정 */
     div[data-testid="stExpander"] details > summary > svg {
-        margin-right: 12px !important;     /* 텍스트와의 간격 확보 */
-        margin-top: 4px !important;        /* 텍스트 줄바꿈 시 위치 보정 */
-        width: 18px !important;            /* 아이콘 너비 고정 */
-        height: 18px !important;           /* 아이콘 높이 고정 */
-        flex-shrink: 0 !important;         /* 아이콘이 찌그러지지 않게 고정 */
-        display: block !important;         /* 화면에 강제로 표시 */
+        margin-right: 12px !important;
+        margin-top: 4px !important;
+        width: 18px !important;
+        height: 18px !important;
+        flex-shrink: 0 !important; /* 찌그러짐 방지 */
+        display: block !important;
     }
     
-    /* Expander 내부 텍스트 폰트 및 줄바꿈 허용 */
+    /* 5. 텍스트 줄바꿈 허용 */
     div[data-testid="stExpander"] details > summary p {
         font-size: 15px;
         font-weight: 600;
         margin: 0;
         line-height: 1.5;
-        white-space: normal !important;    /* 텍스트 줄바꿈 강제 허용 */
-        word-break: keep-all;              /* 단어 단위로 줄바꿈 (한글 최적화) */
+        white-space: normal !important;
+        word-break: keep-all; 
     }
 
     /* 메트릭(수치) 스타일 */
@@ -201,11 +209,8 @@ with tab1:
     st.info("""
     **1. 반발경도 산정 시 설계기준강도를 입력해주세요.**
     * 설계기준강도를 바탕으로 압축강도 추정에 필요한 공식 적용 로직이 자동으로 변경됩니다.
-    
     **2. 타격방향 보정 값을 매뉴얼을 참고해서 상향 타격인지 하향타격인지를 구분해서 선택해주세요.**
-    
     **3. 재령 등 별도로 적용하지 않을 시 프로그램상에서 재령 3000일, 설계기준강도 24MPa가 적용됩니다.**
-    
     **4. 통계ㆍ비교 탭 활용 안내**
     * 추정된 압축강도의 표준편차와 변동계수 등을 계산하여 해당 시설물에 가장 적합한 산정식을 확인하고 검토하기 위함입니다.
     """)
