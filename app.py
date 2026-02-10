@@ -5,15 +5,16 @@ import numpy as np
 import io
 import altair as alt
 
-# [NEW] OCR 기능을 위한 라이브러리 임포트
+# [NEW] OCR 및 이미지 처리를 위한 라이브러리 임포트
 try:
     import easyocr
+    import cv2  # OpenCV 추가
     from PIL import Image
 except ImportError:
-    st.error("OCR 라이브러리가 설치되지 않았습니다. 'pip install easyocr opencv-python-headless'를 실행해주세요.")
+    st.error("필수 라이브러리가 설치되지 않았습니다. 'pip install easyocr opencv-python-headless'를 실행해주세요.")
 
 # =========================================================
-# 1. 페이지 기본 설정 및 스타일 (크로스 브라우저 호환성 강화)
+# 1. 페이지 기본 설정 및 스타일 (모바일 호환성 유지)
 # =========================================================
 st.set_page_config(
     page_title="구조물 안전진단 통합 평가 Pro",
@@ -24,7 +25,7 @@ st.set_page_config(
 
 st.markdown("""
     <style>
-    /* 1. 전체 페이지 좌우 여백 확보 (모바일 안전 영역) */
+    /* 전체 페이지 좌우 여백 확보 */
     .block-container {
         padding-top: 1rem !important;
         padding-bottom: 5rem !important;
@@ -33,17 +34,13 @@ st.markdown("""
         max-width: 100% !important;
     }
 
-    /* 2. 탭 스타일 개선 (가로 스크롤 및 탭 줄바꿈 방지) */
+    /* 탭 스타일 개선 */
     .stTabs [data-baseweb="tab-list"] {
         gap: 8px;
         overflow-x: auto;
         white-space: nowrap;
-        scrollbar-width: none; /* 파이어폭스 스크롤 숨김 */
-        -ms-overflow-style: none; /* IE/Edge 스크롤 숨김 */
+        scrollbar-width: none;
         padding-left: 2px;
-    }
-    .stTabs [data-baseweb="tab-list"]::-webkit-scrollbar {
-        display: none; /* 크롬/사파리 스크롤 숨김 */
     }
     .stTabs [data-baseweb="tab"] {
         height: 45px;
@@ -53,92 +50,85 @@ st.markdown("""
         font-size: 14px;
     }
     
-    /* [핵심 수정] Expander(지침) 모바일 크로스 브라우저 호환성 패치 */
-    
-    /* 3-1. Flexbox로 아이콘과 텍스트 영역 강제 분리 */
+    /* Expander(지침) 호환성 패치 */
     div[data-testid="stExpander"] details > summary {
-        list-style: none !important; /* 표준 마커 제거 */
-        display: flex !important;    /* Flex 레이아웃 적용 */
-        align-items: flex-start !important; /* 상단 정렬 */
+        list-style: none !important;
+        display: flex !important;
+        align-items: flex-start !important;
         padding: 10px !important;
         height: auto !important;
         min-height: 40px;
         border: 1px solid #f0f2f6;
         border-radius: 8px;
     }
-    
-    /* 3-2. 안드로이드/아이폰(Webkit) 기본 화살표 숨김 */
-    div[data-testid="stExpander"] details > summary::-webkit-details-marker {
-        display: none !important;
-    }
-
-    /* 4. Streamlit SVG 아이콘 위치 고정 (겹침 방지 핵심) */
+    div[data-testid="stExpander"] details > summary::-webkit-details-marker { display: none !important; }
     div[data-testid="stExpander"] details > summary > svg {
         margin-right: 12px !important;
-        margin-top: 3px !important; /* 텍스트 첫 줄과 높이 맞춤 */
+        margin-top: 3px !important;
         width: 18px !important;
-        min-width: 18px !important; /* 아이폰에서 찌그러짐 방지 */
+        min-width: 18px !important;
         height: 18px !important;
-        flex-shrink: 0 !important;  /* 절대 줄어들지 않음 */
+        flex-shrink: 0 !important;
         display: block !important;
-        position: static !important; /* 절대 위치 제거 */
-        transform: none !important;
     }
-    
-    /* 5. 텍스트 줄바꿈 및 레이아웃 제어 */
     div[data-testid="stExpander"] details > summary p {
         font-size: 15px;
         font-weight: 600;
         margin: 0;
         line-height: 1.5;
-        white-space: normal !important;    /* 줄바꿈 허용 */
-        word-break: keep-all;              /* 한글 단어 단위 줄바꿈 */
-        flex-grow: 1;                      /* 남은 공간 모두 차지 */
+        white-space: normal !important;
+        word-break: keep-all;
     }
 
-    /* 메트릭(수치) 스타일 */
-    [data-testid="stMetricValue"] {
-        font-size: 1.1rem !important;
-        word-break: break-all;
-    }
-    [data-testid="stMetricLabel"] {
-        font-size: 0.9rem !important;
-    }
-
-    /* 계산 박스 스타일 */
-    .calc-box {
-        background-color: #f8f9fa;
-        padding: 15px;
-        border-radius: 10px;
-        border-left: 5px solid #1f77b4;
-        margin-bottom: 15px;
-    }
-    
-    /* 모바일 표 가로 스크롤 */
+    /* 메트릭 스타일 */
+    [data-testid="stMetricValue"] { font-size: 1.1rem !important; word-break: break-all; }
+    [data-testid="stMetricLabel"] { font-size: 0.9rem !important; }
+    .calc-box { background-color: #f8f9fa; padding: 15px; border-radius: 10px; border-left: 5px solid #1f77b4; margin-bottom: 15px; }
     div[data-testid="stTable"] { overflow-x: auto; }
     </style>
 """, unsafe_allow_html=True)
 
 # =========================================================
-# 2. 전역 함수 정의 (기존 로직 100% 유지)
+# 2. 전역 함수 정의
 # =========================================================
 
-# OCR 처리 함수
+# [UPGRADE] 전처리가 적용된 OCR 함수
 @st.cache_resource
 def load_ocr_reader():
     """EasyOCR 모델 로드 (캐싱 적용)"""
     return easyocr.Reader(['en']) 
 
 def extract_numbers_from_image(image_input):
-    """이미지에서 숫자 추출"""
+    """
+    OpenCV 전처리를 통해 숫자 인식률을 높인 OCR 함수
+    과정: Grayscale -> Gaussian Blur -> Otsu Thresholding
+    """
     try:
         reader = load_ocr_reader()
+        
+        # 1. 이미지 로드 (PIL -> Numpy)
         image = Image.open(image_input)
         image_np = np.array(image)
-        result = reader.readtext(image_np, detail=0, allowlist='0123456789. ')
+        
+        # 2. 전처리: 그레이스케일 변환 (색상 정보 제거)
+        gray = cv2.cvtColor(image_np, cv2.COLOR_RGB2GRAY)
+        
+        # 3. 전처리: 가우시안 블러 (노이즈/잡티 제거)
+        # (5, 5)는 블러 커널 크기입니다. 숫자가 클수록 뭉개집니다.
+        blur = cv2.GaussianBlur(gray, (5, 5), 0)
+        
+        # 4. 전처리: 이진화 (Thresholding) - Otsu 알고리즘
+        # 배경과 글자를 가장 잘 분리하는 값을 자동으로 찾아 흑백으로 만듦
+        # 글자가 명확해지고 그림자가 사라지는 효과가 있음
+        _, binary = cv2.threshold(blur, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+        
+        # 5. OCR 실행
+        # binary 이미지를 입력으로 사용
+        result = reader.readtext(binary, detail=0, allowlist='0123456789. ')
+        
         return " ".join(result)
     except Exception as e:
-        return ""
+        return "" # 에러 발생 시 빈 문자열 반환
 
 def get_angle_correction(R_val, angle):
     try: angle = int(angle)
@@ -211,7 +201,7 @@ with st.sidebar:
 tab1, tab2, tab3, tab4 = st.tabs(["📖 점검 매뉴얼", "🔨 반발경도", "🧪 탄산화", "📈 통계·비교"])
 
 # ---------------------------------------------------------
-# [Tab 1] 점검 매뉴얼 (기존 내용 유지)
+# [Tab 1] 점검 매뉴얼 (유지)
 # ---------------------------------------------------------
 with tab1:
     st.subheader("💡 프로그램 사용 가이드")
@@ -247,6 +237,7 @@ with tab1:
 
         #### **📍 타격 방향 보정 (Angle Correction)**
         """)
+        
         m_df = pd.DataFrame({
             "구분": ["상향 수직 (+90°)", "상향 경사 (+45°)", "수평 타격 (0°)", "하향 경사 (-45°)", "하향 수직 (-90°)"],
             "대상 부재 예시": ["슬래브 하부 (천장)", "보 경사면", "벽체, 기둥 측면", "교대/교각 경사부", "슬래브 상면 (바닥)"]
@@ -272,7 +263,7 @@ with tab1:
         """)
 
 # ---------------------------------------------------------
-# [Tab 2] 반발경도 평가 (OCR 포함, 모바일 레이아웃 최적화)
+# [Tab 2] 반발경도 평가 (OCR 전처리 적용 + 모바일 UI)
 # ---------------------------------------------------------
 with tab2:
     st.subheader("🔨 반발경도 정밀 강도 산정")
@@ -280,13 +271,14 @@ with tab2:
     if mode == "단일 지점":
         with st.container(border=True):
             with st.expander("📸 카메라로 측정값 자동 입력 (Click)", expanded=False):
+                st.caption("💡 팁: 기록표나 숫자가 잘 보이게 촬영하면 인식이 더 잘 됩니다.")
                 img_file = st.camera_input("측정 기록표를 촬영하세요")
                 if img_file is not None:
-                    with st.spinner("이미지에서 숫자를 인식 중입니다..."):
+                    with st.spinner("이미지 보정 및 숫자 인식 중..."):
                         recognized_text = extract_numbers_from_image(img_file)
                         if recognized_text:
                             st.session_state['ocr_result'] = recognized_text
-                            st.success("인식 성공! 아래 입력창을 확인하세요.")
+                            st.success("인식 성공! (자동 보정 적용됨)")
                         else:
                             st.warning("숫자를 인식하지 못했습니다.")
 
@@ -348,7 +340,7 @@ with tab2:
                 with res_tab2: st.dataframe(final_df, use_container_width=True, hide_index=True)
 
 # ---------------------------------------------------------
-# [Tab 3] 탄산화 평가 (기존 유지)
+# [Tab 3] 탄산화 평가 (유지)
 # ---------------------------------------------------------
 with tab3:
     st.subheader("🧪 탄산화 깊이 및 상세 분석")
@@ -381,7 +373,7 @@ with tab3:
         st.altair_chart(line + rule + point, use_container_width=True)
 
 # ---------------------------------------------------------
-# [Tab 4] 통계 및 비교 (기존 유지)
+# [Tab 4] 통계 및 비교 (유지)
 # ---------------------------------------------------------
 with tab4:
     st.subheader("📊 강도 통계 및 비교 분석")
