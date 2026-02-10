@@ -13,7 +13,7 @@ except ImportError:
     st.error("OCR 라이브러리가 설치되지 않았습니다. 'pip install easyocr opencv-python-headless'를 실행해주세요.")
 
 # =========================================================
-# 1. 페이지 기본 설정 및 스타일 (좌측 겹침 해결 CSS 적용)
+# 1. 페이지 기본 설정 및 스타일 (화살표 겹침 해결 CSS 적용)
 # =========================================================
 st.set_page_config(
     page_title="구조물 안전진단 통합 평가 Pro",
@@ -24,22 +24,22 @@ st.set_page_config(
 
 st.markdown("""
     <style>
-    /* [수정 1] 전체 페이지 좌우 여백 확보 (모바일 겹침 방지 핵심) */
+    /* 1. 전체 페이지 좌우 여백 확보 */
     .block-container {
         padding-top: 1rem !important;
         padding-bottom: 5rem !important;
-        padding-left: 1.5rem !important; /* 좌측 여백 충분히 확보 */
-        padding-right: 1.5rem !important;
+        padding-left: 1rem !important;
+        padding-right: 1rem !important;
         max-width: 100% !important;
     }
 
-    /* [수정 2] 탭 스타일 개선 */
+    /* 2. 탭 스타일 개선 (가로 스크롤) */
     .stTabs [data-baseweb="tab-list"] {
         gap: 8px;
         overflow-x: auto;
         white-space: nowrap;
         scrollbar-width: none;
-        padding-left: 2px; /* 탭 좌측 잘림 방지 */
+        padding-left: 2px;
     }
     .stTabs [data-baseweb="tab"] {
         height: 45px;
@@ -49,23 +49,34 @@ st.markdown("""
         font-size: 14px;
     }
     
-    /* [수정 3] Expander(지침) 제목 겹침 방지 */
-    div[data-testid="stExpander"] summary {
-        padding-left: 10px !important;  /* 아이콘과 텍스트 간격 확보 */
-        padding-right: 10px !important;
-        height: auto !important;
+    /* [핵심 수정] Expander(지침) 화살표 겹침 완벽 해결 */
+    div[data-testid="stExpander"] details > summary {
+        display: flex !important;          /* 플렉스 박스로 설정 */
+        align-items: flex-start !important; /* 텍스트가 길 경우 상단 정렬 */
+        padding-top: 10px !important;
+        padding-bottom: 10px !important;
+        height: auto !important;           /* 높이 자동 조절 */
         min-height: 3rem;
-        white-space: normal !important; /* 줄바꿈 허용 */
-        display: flex;
-        align-items: center;
+    }
+
+    /* 화살표 아이콘(SVG) 스타일 강제 조정 */
+    div[data-testid="stExpander"] details > summary > svg {
+        margin-right: 12px !important;     /* 텍스트와의 간격 확보 */
+        margin-top: 4px !important;        /* 텍스트 줄바꿈 시 위치 보정 */
+        width: 18px !important;            /* 아이콘 너비 고정 */
+        height: 18px !important;           /* 아이콘 높이 고정 */
+        flex-shrink: 0 !important;         /* 아이콘이 찌그러지지 않게 고정 */
+        display: block !important;         /* 화면에 강제로 표시 */
     }
     
-    /* Expander 내부 폰트 조정 */
-    div[data-testid="stExpander"] summary p {
+    /* Expander 내부 텍스트 폰트 및 줄바꿈 허용 */
+    div[data-testid="stExpander"] details > summary p {
         font-size: 15px;
         font-weight: 600;
         margin: 0;
-        line-height: 1.4; /* 줄 간격 확보 */
+        line-height: 1.5;
+        white-space: normal !important;    /* 텍스트 줄바꿈 강제 허용 */
+        word-break: keep-all;              /* 단어 단위로 줄바꿈 (한글 최적화) */
     }
 
     /* 메트릭(수치) 스타일 */
@@ -75,9 +86,6 @@ st.markdown("""
     }
     [data-testid="stMetricLabel"] {
         font-size: 0.9rem !important;
-        overflow: hidden;
-        text-overflow: ellipsis;
-        white-space: nowrap;
     }
 
     /* 계산 박스 스타일 */
@@ -186,18 +194,22 @@ with st.sidebar:
 tab1, tab2, tab3, tab4 = st.tabs(["📖 점검 매뉴얼", "🔨 반발경도", "🧪 탄산화", "📈 통계·비교"])
 
 # ---------------------------------------------------------
-# [Tab 1] 점검 매뉴얼 (기존 유지)
+# [Tab 1] 점검 매뉴얼 (기존 내용 유지)
 # ---------------------------------------------------------
 with tab1:
     st.subheader("💡 프로그램 사용 가이드")
     st.info("""
     **1. 반발경도 산정 시 설계기준강도를 입력해주세요.**
     * 설계기준강도를 바탕으로 압축강도 추정에 필요한 공식 적용 로직이 자동으로 변경됩니다.
+    
     **2. 타격방향 보정 값을 매뉴얼을 참고해서 상향 타격인지 하향타격인지를 구분해서 선택해주세요.**
+    
     **3. 재령 등 별도로 적용하지 않을 시 프로그램상에서 재령 3000일, 설계기준강도 24MPa가 적용됩니다.**
+    
     **4. 통계ㆍ비교 탭 활용 안내**
     * 추정된 압축강도의 표준편차와 변동계수 등을 계산하여 해당 시설물에 가장 적합한 산정식을 확인하고 검토하기 위함입니다.
     """)
+    
     st.divider()
     st.subheader("📋 시설물 안전점검·진단 세부지침 매뉴얼")
 
