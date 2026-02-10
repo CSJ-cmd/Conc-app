@@ -13,7 +13,7 @@ except ImportError:
     st.error("OCR 라이브러리가 설치되지 않았습니다. 'pip install easyocr opencv-python-headless'를 실행해주세요.")
 
 # =========================================================
-# 1. 페이지 기본 설정 및 스타일 (모바일 최적화 CSS 적용)
+# 1. 페이지 기본 설정 및 스타일 (모바일 최적화 CSS 강화)
 # =========================================================
 st.set_page_config(
     page_title="구조물 안전진단 통합 평가 Pro",
@@ -62,6 +62,23 @@ st.markdown("""
     
     /* 모바일 표 가로 스크롤 허용 */
     div[data-testid="stTable"] { overflow-x: auto; }
+
+    /* [수정됨] Expander(지침) 헤더 겹침 방지 및 줄바꿈 허용 */
+    div[data-testid="stExpander"] summary {
+        height: auto !important; /* 높이 고정 해제 */
+        min-height: 3rem; /* 최소 높이 확보 */
+        white-space: normal !important; /* 텍스트 줄바꿈 허용 */
+        padding-right: 30px; /* 화살표 아이콘 공간 확보 */
+        display: flex;
+        align-items: center; /* 세로 중앙 정렬 */
+    }
+    
+    /* Expander 내부 텍스트 폰트 조정 */
+    div[data-testid="stExpander"] summary p {
+        font-size: 15px;
+        font-weight: 600;
+        margin-bottom: 0px;
+    }
     </style>
 """, unsafe_allow_html=True)
 
@@ -251,7 +268,7 @@ with tab2:
             if ok:
                 st.success(f"평균 추정 압축강도: **{res['Mean_Strength']:.2f} MPa**")
                 
-                # [모바일 최적화] 4열 -> 2열 x 2행 배치를 통해 가독성 확보
+                # [모바일 최적화] 4열 -> 2열 x 2행 배치
                 with st.container(border=True):
                     r1, r2 = st.columns(2)
                     with r1: st.metric("유효 평균 R", f"{res['R_avg']:.1f}")
@@ -295,7 +312,7 @@ with tab2:
                 with res_tab2: st.dataframe(final_df, use_container_width=True, hide_index=True)
 
 # ---------------------------------------------------------
-# [Tab 3] 탄산화 평가 (기존 유지: 지표 상단 -> 그래프 하단)
+# [Tab 3] 탄산화 평가 (기존 유지)
 # ---------------------------------------------------------
 with tab3:
     st.subheader("🧪 탄산화 깊이 및 상세 분석")
@@ -328,7 +345,7 @@ with tab3:
         st.altair_chart(line + rule + point, use_container_width=True)
 
 # ---------------------------------------------------------
-# [Tab 4] 통계 및 비교 (기존 유지: 40MPa 필터링)
+# [Tab 4] 통계 및 비교 (기존 유지)
 # ---------------------------------------------------------
 with tab4:
     st.subheader("📊 강도 통계 및 비교 분석")
@@ -346,7 +363,6 @@ with tab4:
             if len(data) >= 2:
                 avg_v, std_v = np.mean(data), np.std(data, ddof=1)
                 with st.container(border=True):
-                    # [모바일 최적화] 통계도 공간 확보를 위해 글자 크기 CSS 적용됨
                     m1, m2, m3 = st.columns(3)
                     m1.metric("평균", f"{avg_v:.2f} MPa", delta=f"{(avg_v/st_fck*100):.1f}%"); m2.metric("표준편차 (σ)", f"{std_v:.2f} MPa"); m3.metric("변동계수 (CV)", f"{(std_v/avg_v*100):.1f}%")
                 st.altair_chart(alt.Chart(pd.DataFrame({"번호": range(1, len(data)+1), "강도": data})).mark_bar().encode(x='번호:O', y='강도:Q', color=alt.condition(alt.datum.강도 >= st_fck, alt.value('#4D96FF'), alt.value('#FF6B6B'))) + alt.Chart(pd.DataFrame({'y':[st_fck]})).mark_rule(color='red', strokeDash=[5,3], size=2).encode(y='y'), use_container_width=True)
