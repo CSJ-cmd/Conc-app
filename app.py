@@ -84,44 +84,43 @@ st.markdown("""
 # 2. 전역 함수 정의 (안전장치 추가됨)
 # =========================================================
 
-# [수정됨] 안전장치가 포함된 OCR 함수
+# [수정] 메모리 절약을 위한 리사이징 기능이 추가된 OCR 함수
 def extract_numbers_from_image(image_input):
-    """
-    이미지에서 숫자를 추출하는 함수.
-    에러가 발생하면 앱을 멈추지 않고 빈 문자열("")을 반환합니다.
-    """
     try:
-        # 라이브러리를 함수 안에서 불러옵니다 (에러 격리)
         import easyocr
         import cv2
         import numpy as np
         from PIL import Image
 
-        # 1. 이미지 로드 (PIL -> Numpy)
+        # 1. 이미지 로드
         image = Image.open(image_input)
+        
+        # [핵심] 이미지 크기 줄이기 (메모리 절약)
+        # 가로 길이를 800px로 줄여서 분석 속도를 높이고 튕김을 방지합니다.
+        max_width = 800
+        if image.width > max_width:
+            ratio = max_width / float(image.width)
+            new_height = int((float(image.height) * float(ratio)))
+            image = image.resize((max_width, new_height), Image.LANCZOS)
+
         image_np = np.array(image)
         
-        # 2. 전처리: 그레이스케일 변환
+        # 2. 전처리 (그레이스케일 -> 블러 -> 이진화)
         gray = cv2.cvtColor(image_np, cv2.COLOR_RGB2GRAY)
-        
-        # 3. 전처리: 가우시안 블러 (노이즈 제거)
         blur = cv2.GaussianBlur(gray, (5, 5), 0)
-        
-        # 4. 전처리: 이진화 (Otsu 알고리즘)
         _, binary = cv2.threshold(blur, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
         
-        # 5. OCR 모델 로드 (영어/숫자 모드)
-        reader = easyocr.Reader(['en']) 
+        # 3. OCR 모델 로드 (GPU 사용 안 함 설정 명시)
+        # Streamlit Cloud는 GPU가 없으므로 gpu=False를 꼭 해야 오류가 덜 납니다.
+        reader = easyocr.Reader(['en'], gpu=False) 
         
-        # 6. OCR 실행 (숫자와 점만 허용)
+        # 4. OCR 실행
         result = reader.readtext(binary, detail=0, allowlist='0123456789. ')
-        
         return " ".join(result)
 
     except Exception as e:
-        # 에러 발생 시 콘솔에만 출력하고 사용자에게는 빈 값 반환 (앱 다운 방지)
         print(f"⚠️ OCR 처리 중 오류 발생: {e}")
-        return "" 
+        return "" # 에러 나면 빈 값 반환
 
 def get_angle_correction(R_val, angle):
     try: angle = int(angle)
