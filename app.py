@@ -5,16 +5,8 @@ import numpy as np
 import io
 import altair as alt
 
-# [NEW] OCR 및 이미지 처리를 위한 라이브러리 임포트
-try:
-    import easyocr
-    import cv2  # OpenCV 추가
-    from PIL import Image
-except ImportError:
-    st.error("필수 라이브러리가 설치되지 않았습니다. 'pip install easyocr opencv-python-headless'를 실행해주세요.")
-
 # =========================================================
-# 1. 페이지 기본 설정 및 스타일 (모바일 호환성 유지)
+# 1. 페이지 기본 설정 및 스타일 (변경 없음)
 # =========================================================
 st.set_page_config(
     page_title="구조물 안전진단 통합 평가 Pro",
@@ -89,46 +81,47 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # =========================================================
-# 2. 전역 함수 정의
+# 2. 전역 함수 정의 (안전장치 추가됨)
 # =========================================================
 
-# [UPGRADE] 전처리가 적용된 OCR 함수
-@st.cache_resource
-def load_ocr_reader():
-    """EasyOCR 모델 로드 (캐싱 적용)"""
-    return easyocr.Reader(['en']) 
-
+# [수정됨] 안전장치가 포함된 OCR 함수
 def extract_numbers_from_image(image_input):
     """
-    OpenCV 전처리를 통해 숫자 인식률을 높인 OCR 함수
-    과정: Grayscale -> Gaussian Blur -> Otsu Thresholding
+    이미지에서 숫자를 추출하는 함수.
+    에러가 발생하면 앱을 멈추지 않고 빈 문자열("")을 반환합니다.
     """
     try:
-        reader = load_ocr_reader()
-        
+        # 라이브러리를 함수 안에서 불러옵니다 (에러 격리)
+        import easyocr
+        import cv2
+        import numpy as np
+        from PIL import Image
+
         # 1. 이미지 로드 (PIL -> Numpy)
         image = Image.open(image_input)
         image_np = np.array(image)
         
-        # 2. 전처리: 그레이스케일 변환 (색상 정보 제거)
+        # 2. 전처리: 그레이스케일 변환
         gray = cv2.cvtColor(image_np, cv2.COLOR_RGB2GRAY)
         
-        # 3. 전처리: 가우시안 블러 (노이즈/잡티 제거)
-        # (5, 5)는 블러 커널 크기입니다. 숫자가 클수록 뭉개집니다.
+        # 3. 전처리: 가우시안 블러 (노이즈 제거)
         blur = cv2.GaussianBlur(gray, (5, 5), 0)
         
-        # 4. 전처리: 이진화 (Thresholding) - Otsu 알고리즘
-        # 배경과 글자를 가장 잘 분리하는 값을 자동으로 찾아 흑백으로 만듦
-        # 글자가 명확해지고 그림자가 사라지는 효과가 있음
+        # 4. 전처리: 이진화 (Otsu 알고리즘)
         _, binary = cv2.threshold(blur, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
         
-        # 5. OCR 실행
-        # binary 이미지를 입력으로 사용
+        # 5. OCR 모델 로드 (영어/숫자 모드)
+        reader = easyocr.Reader(['en']) 
+        
+        # 6. OCR 실행 (숫자와 점만 허용)
         result = reader.readtext(binary, detail=0, allowlist='0123456789. ')
         
         return " ".join(result)
+
     except Exception as e:
-        return "" # 에러 발생 시 빈 문자열 반환
+        # 에러 발생 시 콘솔에만 출력하고 사용자에게는 빈 값 반환 (앱 다운 방지)
+        print(f"⚠️ OCR 처리 중 오류 발생: {e}")
+        return "" 
 
 def get_angle_correction(R_val, angle):
     try: angle = int(angle)
@@ -201,7 +194,7 @@ with st.sidebar:
 tab1, tab2, tab3, tab4 = st.tabs(["📖 점검 매뉴얼", "🔨 반발경도", "🧪 탄산화", "📈 통계·비교"])
 
 # ---------------------------------------------------------
-# [Tab 1] 점검 매뉴얼 (유지)
+# [Tab 1] 점검 매뉴얼 (기존 유지)
 # ---------------------------------------------------------
 with tab1:
     st.subheader("💡 프로그램 사용 가이드")
@@ -263,37 +256,37 @@ with tab1:
         """)
 
 # ---------------------------------------------------------
-# [Tab 2] 반발경도 평가 (카메라 모드 개선 적용)
+# [Tab 2] 반발경도 평가 (안전장치 + 모바일 최적화 적용)
 # ---------------------------------------------------------
 with tab2:
     st.subheader("🔨 반발경도 정밀 강도 산정")
     
-    # [UI 개선] 입력 방식 선택 (단일 vs 다중)
+    # [수정] 입력 방식 선택 (단일 vs 다중)
     mode = st.radio("입력 방식", ["단일 지점 (카메라/파일)", "다중 지점 (엑셀 업로드)"], horizontal=True)
     
     if mode.startswith("단일"):
         with st.container(border=True):
             st.markdown("##### 📸 측정값 입력")
             
-            # [핵심 변경] 카메라 모드 선택 (후면 카메라 유도 기능)
-            # st.camera_input은 초점이 안 잡히는 경우가 많아 '기본 카메라 앱' 모드를 기본으로 추천합니다.
+            # [수정] 카메라 모드 선택 (후면 카메라 사용을 위해 파일 업로더 우선)
             cam_mode = st.toggle("💻 웹캠(PC) 모드로 전환하기", value=False)
 
             img_file = None
             
             if not cam_mode:
-                # [모드 A] 기본 카메라 앱 사용 (모바일 권장: 후면카메라, 자동초점, 플래시 사용 가능)
-                st.info("📱 모바일에서는 **'사진 촬영'**을 선택하면 **후면 카메라(고화질/초점)**가 자동 실행됩니다.")
-                img_file = st.file_uploader("아래 버튼을 눌러 촬영하거나 갤러리에서 선택하세요", type=['png', 'jpg', 'jpeg', 'bmp'])
+                # [모드 A] 기본 카메라 앱 사용 (모바일 권장: 후면카메라)
+                st.caption("📱 모바일: '사진 촬영' 선택 시 **후면 카메라(고화질/자동초점)**가 실행됩니다.")
+                img_file = st.file_uploader("촬영 버튼 또는 갤러리 선택", type=['png', 'jpg', 'jpeg', 'bmp'])
             else:
-                # [모드 B] 스트림릿 웹캠 사용 (PC 권장 / 모바일은 전면이 기본일 수 있음)
-                st.caption("💡 화면 내의 카메라 전환 아이콘을 눌러 전/후면을 변경할 수 있습니다.")
+                # [모드 B] 스트림릿 웹캠 사용 (PC 권장)
+                st.caption("💡 PC/노트북 웹캠을 사용할 때 적합합니다.")
                 img_file = st.camera_input("측정 기록표를 촬영하세요")
 
-            # --- 이하 OCR 처리 로직은 동일 ---
             if img_file is not None:
                 with st.spinner("이미지 보정 및 숫자 인식 중..."):
+                    # 위에서 정의한 '안전장치'가 적용된 함수 실행
                     recognized_text = extract_numbers_from_image(img_file)
+                    
                     if recognized_text:
                         st.session_state['ocr_result'] = recognized_text
                         st.success(f"인식 성공: {recognized_text}")
@@ -311,11 +304,11 @@ with tab2:
             txt = st.text_area("측정값 (자동 인식 결과 수정 가능)", value=default_txt, height=80)
             
         if st.button("계산 실행", type="primary", use_container_width=True):
-            # ... (이하 계산 로직 기존과 동일) ...
             rd = [float(x) for x in txt.replace(',',' ').split() if x.strip()]
             ok, res = calculate_strength(rd, angle, days, fck)
             if ok:
                 st.success(f"평균 추정 압축강도: **{res['Mean_Strength']:.2f} MPa**")
+                
                 with st.container(border=True):
                     r1, r2 = st.columns(2)
                     with r1: st.metric("유효 평균 R", f"{res['R_avg']:.1f}")
@@ -329,17 +322,38 @@ with tab2:
                 st.altair_chart(chart + alt.Chart(pd.DataFrame({'y': [fck]})).mark_rule(color='red', strokeDash=[5, 3], size=2).encode(y='y'), use_container_width=True)
             else:
                 st.error(res)
-    
     else:
-        # ... (다중 지점/엑셀 업로드 로직 기존과 동일) ...
+        # 다중 지점 (엑셀 업로드) - 기존 로직 유지
         uploaded_file = st.file_uploader("CSV 또는 Excel 파일 업로드", type=["csv", "xlsx"])
-        # (이하 생략 - 기존 코드 그대로 사용)
+        init_data = []
         if uploaded_file:
-             # (기존 코드와 동일하게 연결)
-             pass
+            try:
+                df_up = pd.read_csv(uploaded_file) if uploaded_file.name.endswith('.csv') else pd.read_excel(uploaded_file)
+                for _, row in df_up.iterrows(): init_data.append({"선택": True, "지점": row.get("지점", "P"), "각도": int(row.get("각도", 0)), "재령": int(row.get("재령", 3000)), "설계": float(row.get("설계", 24.0)), "데이터": str(row.get("데이터", ""))})
+            except: st.error("파일 파싱 실패")
+        df_batch = pd.DataFrame(init_data) if init_data else pd.DataFrame(columns=["선택","지점","각도","재령","설계","데이터"])
+        edited_df = st.data_editor(df_batch, column_config={"선택": st.column_config.CheckboxColumn("선택", default=True), "각도": st.column_config.SelectboxColumn("각도 (α)", options=[90, 45, 0, -45, -90], required=True), "재령": st.column_config.NumberColumn("재령", default=3000), "설계": st.column_config.NumberColumn("설계", default=24)}, use_container_width=True, hide_index=True, num_rows="dynamic")
+        if st.button("🚀 일괄 계산 실행", type="primary", use_container_width=True):
+            batch_res = []
+            for _, row in edited_df.iterrows():
+                if not row["선택"]: continue
+                try:
+                    rd_list = [float(x) for x in str(row["데이터"]).replace(',',' ').split() if x.replace('.','',1).isdigit()]
+                    ang_v, age_v, fck_v = (0 if pd.isna(row["각도"]) else row["각도"]), (3000 if pd.isna(row["재령"]) else row["재령"]), (24 if pd.isna(row["설계"]) else row["설계"])
+                    ok, res = calculate_strength(rd_list, ang_v, age_v, fck_v)
+                    if ok:
+                        data_entry = {"지점": row["지점"], "설계": fck_v, "추정강도": round(res["Mean_Strength"], 2), "강도비(%)": round((res["Mean_Strength"]/fck_v)*100, 1), "유효평균R": round(res["R_avg"], 1), "보정R0": round(res["R0"], 1), "재령계수": round(res["Age_Coeff"], 2), "기각수": res["Discard"], "기각데이터": str(res["Excluded"])}
+                        for f_name, f_val in res["Formulas"].items(): data_entry[f_name] = round(f_val, 1)
+                        batch_res.append(data_entry)
+                except: continue
+            if batch_res:
+                final_df = pd.DataFrame(batch_res)
+                res_tab1, res_tab2 = st.tabs(["📋 요약", "🔍 세부 데이터"])
+                with res_tab1: st.dataframe(final_df[["지점", "설계", "추정강도", "강도비(%)"]], use_container_width=True, hide_index=True)
+                with res_tab2: st.dataframe(final_df, use_container_width=True, hide_index=True)
 
 # ---------------------------------------------------------
-# [Tab 3] 탄산화 평가 (유지)
+# [Tab 3] 탄산화 평가 (기존 유지)
 # ---------------------------------------------------------
 with tab3:
     st.subheader("🧪 탄산화 깊이 및 상세 분석")
@@ -372,7 +386,7 @@ with tab3:
         st.altair_chart(line + rule + point, use_container_width=True)
 
 # ---------------------------------------------------------
-# [Tab 4] 통계 및 비교 (유지)
+# [Tab 4] 통계 및 비교 (기존 유지)
 # ---------------------------------------------------------
 with tab4:
     st.subheader("📊 강도 통계 및 비교 분석")
