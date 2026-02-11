@@ -5,3 +5,4 @@ altair
 easyocr
 opencv-python-headless
 Pillow
+openpyxl
