@@ -4,6 +4,7 @@ import pandas as pd
 import numpy as np
 import io
 import altair as alt
+from PIL import Image
 
 # =========================================================
 # 1. 페이지 기본 설정 및 스타일 (변경 없음)
@@ -81,50 +82,61 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # =========================================================
-# 2. 전역 함수 정의 (안전장치 추가됨)
+# 2. 핵심 로직 및 함수 정의 (최적화 적용됨)
 # =========================================================
 
-# [수정] 메모리 절약을 위한 리사이징 기능이 추가된 OCR 함수
-def extract_numbers_from_image(image_input):
-    try:
-        import easyocr
-        import cv2
-        import numpy as np
-        from PIL import Image
+# [최적화 1] OCR 모델 캐싱 (매번 로드하지 않음)
+@st.cache_resource
+def load_ocr_model():
+    import easyocr
+    # GPU가 없는 환경(Streamlit Cloud)을 고려하여 gpu=False 명시
+    return easyocr.Reader(['en'], gpu=False)
 
-        # 1. 이미지 로드
-        image = Image.open(image_input)
+def extract_numbers_from_image(image_input):
+    """
+    이미지를 받아 숫자를 추출합니다.
+    - 메모리 절약을 위한 리사이징
+    - 캐시된 모델 사용
+    """
+    try:
+        import cv2
         
-        # [핵심] 이미지 크기 줄이기 (메모리 절약)
-        # 가로 길이를 800px로 줄여서 분석 속도를 높이고 튕김을 방지합니다.
+        # PIL 이미지로 변환 (이미 열려있는 경우 대응)
+        if isinstance(image_input, Image.Image):
+            image = image_input
+        else:
+            image = Image.open(image_input)
+        
+        # [메모리 최적화] 이미지 크기 줄이기 (가로 800px 기준)
         max_width = 800
         if image.width > max_width:
             ratio = max_width / float(image.width)
             new_height = int((float(image.height) * float(ratio)))
-            image = image.resize((max_width, new_height), Image.LANCZOS)
+            image = image.resize((max_width, new_height), Image.Resampling.LANCZOS)
 
         image_np = np.array(image)
         
-        # 2. 전처리 (그레이스케일 -> 블러 -> 이진화)
+        # 전처리 (그레이스케일 -> 블러 -> 이진화)
         gray = cv2.cvtColor(image_np, cv2.COLOR_RGB2GRAY)
         blur = cv2.GaussianBlur(gray, (5, 5), 0)
         _, binary = cv2.threshold(blur, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
         
-        # 3. OCR 모델 로드 (GPU 사용 안 함 설정 명시)
-        # Streamlit Cloud는 GPU가 없으므로 gpu=False를 꼭 해야 오류가 덜 납니다.
-        reader = easyocr.Reader(['en'], gpu=False) 
+        # 캐시된 모델 로드
+        reader = load_ocr_model() 
         
-        # 4. OCR 실행
+        # OCR 실행
         result = reader.readtext(binary, detail=0, allowlist='0123456789. ')
         return " ".join(result)
 
     except Exception as e:
         print(f"⚠️ OCR 처리 중 오류 발생: {e}")
-        return "" # 에러 나면 빈 값 반환
+        return "" 
 
+# [최적화 2] 각도 보정 선형 보간 (Linear Interpolation) 적용
 def get_angle_correction(R_val, angle):
     try: angle = int(angle)
     except: angle = 0
+    
     correction_table = {
         -90: {20: +3.2, 30: +3.1, 40: +2.7, 50: +2.2, 60: +1.7}, 
         -45: {20: +2.4, 30: +2.3, 40: +2.0, 50: +1.6, 60: +1.3}, 
@@ -132,22 +144,35 @@ def get_angle_correction(R_val, angle):
         45:  {20: -3.5, 30: -3.1, 40: -2.0, 50: -2.7, 60: -1.6}, 
         90:  {20: -5.4, 30: -4.7, 40: -3.9, 50: -3.1, 60: -2.3}  
     }
+    
     if angle not in correction_table: return 0.0
+    
     data = correction_table[angle]
-    sorted_keys = sorted(data.keys())
-    target_key = sorted_keys[0] 
-    for key in sorted_keys:
-        if R_val >= key: target_key = key
-        else: break
-    return data[target_key]
+    sorted_keys = sorted(data.keys()) # [20, 30, 40, 50, 60]
+    
+    # 범위 밖 처리 (최솟값 미만, 최댓값 초과 시 경계값 사용)
+    if R_val <= sorted_keys[0]: return data[sorted_keys[0]]
+    if R_val >= sorted_keys[-1]: return data[sorted_keys[-1]]
+    
+    # 선형 보간 (Linear Interpolation)
+    for i in range(len(sorted_keys) - 1):
+        k1, k2 = sorted_keys[i], sorted_keys[i+1]
+        if k1 <= R_val <= k2:
+            v1, v2 = data[k1], data[k2]
+            # 보간 공식: y = y1 + (x - x1) * ((y2 - y1) / (x2 - x1))
+            return v1 + (R_val - k1) * (v2 - v1) / (k2 - k1)
+            
+    return 0.0
 
 def get_age_coefficient(days):
     try: days = float(days)
     except: days = 3000.0
     age_table = {10: 1.55, 20: 1.12, 28: 1.00, 50: 0.87, 100: 0.78, 150: 0.74, 200: 0.72, 300: 0.70, 500: 0.67, 1000: 0.65, 3000: 0.63}
     sorted_days = sorted(age_table.keys())
+    
     if days >= sorted_days[-1]: return age_table[sorted_days[-1]]
     if days <= sorted_days[0]: return age_table[sorted_days[0]]
+    
     for i in range(len(sorted_days) - 1):
         d1, d2 = sorted_days[i], sorted_days[i+1]
         if d1 <= days <= d2:
@@ -156,24 +181,42 @@ def get_age_coefficient(days):
     return 1.0
 
 def calculate_strength(readings, angle, days, design_fck=24.0):
-    if not readings or len(readings) < 5: return False, "데이터 부족"
+    if not readings or len(readings) < 5: return False, "데이터 부족 (최소 5개 이상)"
+    
+    # 1. 1차 평균
     avg1 = sum(readings) / len(readings)
+    
+    # 2. 20% 타격법 (이상치 제거)
     valid = [r for r in readings if avg1 * 0.8 <= r <= avg1 * 1.2]
     excluded = [r for r in readings if r not in valid]
+    
+    # 3. 기각 룰 적용 (20개 기준 5개 이상 기각 시 무효)
     if len(readings) >= 20 and len(excluded) > 4: return False, f"시험 무효 (기각 {len(excluded)}개)"
     if not valid: return False, "유효 데이터 없음"
+    
+    # 4. 유효 반발경도 평균 및 보정
     R_avg = sum(valid) / len(valid)
-    corr = get_angle_correction(R_avg, angle)
+    corr = get_angle_correction(R_avg, angle) # 선형 보간 적용됨
     R0 = R_avg + corr
     age_c = get_age_coefficient(days)
+    
+    # 5. 강도 추정식
     f_aij = max(0, (7.3 * R0 + 100) * 0.098 * age_c)        
     f_jsms = max(0, (1.27 * R0 - 18.0) * age_c)             
     f_mst = max(0, (15.2 * R0 - 112.8) * 0.098 * age_c)     
     f_kwon = max(0, (2.304 * R0 - 38.80) * age_c)           
     f_kalis = max(0, (1.3343 * R0 + 8.1977) * age_c)
+
+    # 설계강도에 따른 적용 공식 선정 (참고용 Mean값 계산)
     target_fs = [f_aij, f_jsms] if design_fck < 40 else [f_mst, f_kwon, f_kalis]
     s_mean = np.mean(target_fs)
-    return True, {"R_initial": avg1, "R_avg": R_avg, "Angle_Corr": corr, "R0": R0, "Age_Coeff": age_c, "Discard": len(excluded), "Excluded": excluded, "Formulas": {"일본건축": f_aij, "일본재료": f_jsms, "과기부": f_mst, "권영웅": f_kwon, "KALIS": f_kalis}, "Mean_Strength": s_mean}
+    
+    return True, {
+        "R_initial": avg1, "R_avg": R_avg, "Angle_Corr": corr, "R0": R0, 
+        "Age_Coeff": age_c, "Discard": len(excluded), "Excluded": excluded, 
+        "Formulas": {"일본건축": f_aij, "일본재료": f_jsms, "과기부": f_mst, "권영웅": f_kwon, "KALIS": f_kalis}, 
+        "Mean_Strength": s_mean
+    }
 
 def convert_df(df):
     return df.to_csv(index=False).encode('utf-8-sig')
@@ -193,7 +236,7 @@ with st.sidebar:
 tab1, tab2, tab3, tab4 = st.tabs(["📖 점검 매뉴얼", "🔨 반발경도", "🧪 탄산화", "📈 통계·비교"])
 
 # ---------------------------------------------------------
-# [Tab 1] 점검 매뉴얼 (기존 유지)
+# [Tab 1] 점검 매뉴얼 (요청하신 대로 100% 유지)
 # ---------------------------------------------------------
 with tab1:
     st.subheader("💡 프로그램 사용 가이드")
@@ -255,36 +298,42 @@ with tab1:
         """)
 
 # ---------------------------------------------------------
-# [Tab 2] 반발경도 평가 (안전장치 + 모바일 최적화 적용)
+# [Tab 2] 반발경도 평가 (이미지 회전 기능 추가됨)
 # ---------------------------------------------------------
 with tab2:
     st.subheader("🔨 반발경도 정밀 강도 산정")
     
-    # [수정] 입력 방식 선택 (단일 vs 다중)
     mode = st.radio("입력 방식", ["단일 지점 (카메라/파일)", "다중 지점 (엑셀 업로드)"], horizontal=True)
     
     if mode.startswith("단일"):
         with st.container(border=True):
             st.markdown("##### 📸 측정값 입력")
             
-            # [수정] 카메라 모드 선택 (후면 카메라 사용을 위해 파일 업로더 우선)
             cam_mode = st.toggle("💻 웹캠(PC) 모드로 전환하기", value=False)
 
             img_file = None
             
             if not cam_mode:
-                # [모드 A] 기본 카메라 앱 사용 (모바일 권장: 후면카메라)
                 st.caption("📱 모바일: '사진 촬영' 선택 시 **후면 카메라(고화질/자동초점)**가 실행됩니다.")
                 img_file = st.file_uploader("촬영 버튼 또는 갤러리 선택", type=['png', 'jpg', 'jpeg', 'bmp'])
             else:
-                # [모드 B] 스트림릿 웹캠 사용 (PC 권장)
                 st.caption("💡 PC/노트북 웹캠을 사용할 때 적합합니다.")
                 img_file = st.camera_input("측정 기록표를 촬영하세요")
 
+            # [기능 추가] 이미지 회전 버튼 (OCR 인식률 향상)
+            if img_file:
+                st.caption("이미지가 회전되어 보이면 아래 버튼으로 조정 후 [계산 실행]을 눌러주세요.")
+                rot_val = st.radio("이미지 회전(반시계)", [0, 90, 180, 270], index=0, horizontal=True, key="img_rot")
+
             if img_file is not None:
-                with st.spinner("이미지 보정 및 숫자 인식 중..."):
-                    # 위에서 정의한 '안전장치'가 적용된 함수 실행
-                    recognized_text = extract_numbers_from_image(img_file)
+                with st.spinner("이미지 처리 및 숫자 인식 중..."):
+                    # 1. PIL 이미지 열기 및 회전 적용
+                    pil_image = Image.open(img_file)
+                    if rot_val != 0:
+                        pil_image = pil_image.rotate(rot_val, expand=True)
+
+                    # 2. 최적화된 OCR 함수 호출
+                    recognized_text = extract_numbers_from_image(pil_image)
                     
                     if recognized_text:
                         st.session_state['ocr_result'] = recognized_text
@@ -311,27 +360,54 @@ with tab2:
                 with st.container(border=True):
                     r1, r2 = st.columns(2)
                     with r1: st.metric("유효 평균 R", f"{res['R_avg']:.1f}")
-                    with r2: st.metric("각도 보정", f"{res['Angle_Corr']:+.1f}")
+                    with r2: st.metric("각도 보정 (보간법)", f"{res['Angle_Corr']:+.1f}")
                     r3, r4 = st.columns(2)
                     with r3: st.metric("최종 R₀", f"{res['R0']:.1f}")
                     with r4: st.metric("재령 계수 α", f"{res['Age_Coeff']:.2f}")
 
                 df_f = pd.DataFrame({"공식": res["Formulas"].keys(), "강도": res["Formulas"].values()})
-                chart = alt.Chart(df_f).mark_bar().encode(x=alt.X('공식', sort=None), y='강도', color=alt.condition(alt.datum.강도 >= fck, alt.value('#4D96FF'), alt.value('#FF6B6B'))).properties(height=350)
+                chart = alt.Chart(df_f).mark_bar().encode(
+                    x=alt.X('공식', sort=None), 
+                    y='강도', 
+                    color=alt.condition(alt.datum.강도 >= fck, alt.value('#4D96FF'), alt.value('#FF6B6B'))
+                ).properties(height=350)
                 st.altair_chart(chart + alt.Chart(pd.DataFrame({'y': [fck]})).mark_rule(color='red', strokeDash=[5, 3], size=2).encode(y='y'), use_container_width=True)
             else:
                 st.error(res)
     else:
-        # 다중 지점 (엑셀 업로드) - 기존 로직 유지
+        # 다중 지점 (엑셀 업로드) - 오류 처리 강화
         uploaded_file = st.file_uploader("CSV 또는 Excel 파일 업로드", type=["csv", "xlsx"])
         init_data = []
         if uploaded_file:
             try:
-                df_up = pd.read_csv(uploaded_file) if uploaded_file.name.endswith('.csv') else pd.read_excel(uploaded_file)
-                for _, row in df_up.iterrows(): init_data.append({"선택": True, "지점": row.get("지점", "P"), "각도": int(row.get("각도", 0)), "재령": int(row.get("재령", 3000)), "설계": float(row.get("설계", 24.0)), "데이터": str(row.get("데이터", ""))})
-            except: st.error("파일 파싱 실패")
+                if uploaded_file.name.endswith('.csv'):
+                    df_up = pd.read_csv(uploaded_file)
+                else:
+                    df_up = pd.read_excel(uploaded_file)
+                
+                for _, row in df_up.iterrows(): 
+                    init_data.append({
+                        "선택": True, "지점": row.get("지점", "P"), "각도": int(row.get("각도", 0)), 
+                        "재령": int(row.get("재령", 3000)), "설계": float(row.get("설계", 24.0)), 
+                        "데이터": str(row.get("데이터", ""))
+                    })
+            except ImportError:
+                st.error("엑셀 파일을 읽으려면 'openpyxl' 라이브러리가 필요합니다.")
+            except Exception as e:
+                st.error(f"파일 파싱 실패: {e}")
+                
         df_batch = pd.DataFrame(init_data) if init_data else pd.DataFrame(columns=["선택","지점","각도","재령","설계","데이터"])
-        edited_df = st.data_editor(df_batch, column_config={"선택": st.column_config.CheckboxColumn("선택", default=True), "각도": st.column_config.SelectboxColumn("각도 (α)", options=[90, 45, 0, -45, -90], required=True), "재령": st.column_config.NumberColumn("재령", default=3000), "설계": st.column_config.NumberColumn("설계", default=24)}, use_container_width=True, hide_index=True, num_rows="dynamic")
+        edited_df = st.data_editor(
+            df_batch, 
+            column_config={
+                "선택": st.column_config.CheckboxColumn("선택", default=True), 
+                "각도": st.column_config.SelectboxColumn("각도 (α)", options=[90, 45, 0, -45, -90], required=True), 
+                "재령": st.column_config.NumberColumn("재령", default=3000), 
+                "설계": st.column_config.NumberColumn("설계", default=24)
+            }, 
+            use_container_width=True, hide_index=True, num_rows="dynamic"
+        )
+        
         if st.button("🚀 일괄 계산 실행", type="primary", use_container_width=True):
             batch_res = []
             for _, row in edited_df.iterrows():
@@ -341,10 +417,16 @@ with tab2:
                     ang_v, age_v, fck_v = (0 if pd.isna(row["각도"]) else row["각도"]), (3000 if pd.isna(row["재령"]) else row["재령"]), (24 if pd.isna(row["설계"]) else row["설계"])
                     ok, res = calculate_strength(rd_list, ang_v, age_v, fck_v)
                     if ok:
-                        data_entry = {"지점": row["지점"], "설계": fck_v, "추정강도": round(res["Mean_Strength"], 2), "강도비(%)": round((res["Mean_Strength"]/fck_v)*100, 1), "유효평균R": round(res["R_avg"], 1), "보정R0": round(res["R0"], 1), "재령계수": round(res["Age_Coeff"], 2), "기각수": res["Discard"], "기각데이터": str(res["Excluded"])}
+                        data_entry = {
+                            "지점": row["지점"], "설계": fck_v, "추정강도": round(res["Mean_Strength"], 2), 
+                            "강도비(%)": round((res["Mean_Strength"]/fck_v)*100, 1), 
+                            "유효평균R": round(res["R_avg"], 1), "보정R0": round(res["R0"], 1), 
+                            "재령계수": round(res["Age_Coeff"], 2), "기각수": res["Discard"], "기각데이터": str(res["Excluded"])
+                        }
                         for f_name, f_val in res["Formulas"].items(): data_entry[f_name] = round(f_val, 1)
                         batch_res.append(data_entry)
                 except: continue
+            
             if batch_res:
                 final_df = pd.DataFrame(batch_res)
                 res_tab1, res_tab2 = st.tabs(["📋 요약", "🔍 세부 데이터"])
@@ -385,24 +467,54 @@ with tab3:
         st.altair_chart(line + rule + point, use_container_width=True)
 
 # ---------------------------------------------------------
-# [Tab 4] 통계 및 비교 (기존 유지)
+# [Tab 4] 통계 및 비교 (필터링 로직 수정됨)
 # ---------------------------------------------------------
 with tab4:
     st.subheader("📊 강도 통계 및 비교 분석")
     c1, c2 = st.columns([1, 2])
     with c1: st_fck = st.number_input("기준 설계강도(MPa)", 15.0, 100.0, 24.0, key="stat_fck")
     with c2: raw_txt = st.text_area("강도 데이터 목록", "24.5 26.2 23.1 21.8 25.5 27.0", height=68)
+    
     parsed = [float(x) for x in raw_txt.replace(',',' ').split() if x.replace('.','',1).isdigit()]
+    
     if parsed:
         df_stat = pd.DataFrame({"순번": range(1, len(parsed) + 1), "추정강도": parsed, "적용공식": ["전체평균(추천)"] * len(parsed)})
-        label_df = st.data_editor(df_stat, column_config={"순번": st.column_config.NumberColumn("No.", disabled=True), "적용공식": st.column_config.SelectboxColumn("공식 선택", options=["일본건축", "일본재료", "과기부", "권영웅", "KALIS", "전체평균(추천)"], required=True)}, use_container_width=True, hide_index=True)
+        
+        # 적용 공식 선택 Editor
+        label_df = st.data_editor(
+            df_stat, 
+            column_config={
+                "순번": st.column_config.NumberColumn("No.", disabled=True), 
+                "적용공식": st.column_config.SelectboxColumn("공식 선택", options=["일본건축", "일본재료", "과기부", "권영웅", "KALIS", "전체평균(추천)"], required=True)
+            }, 
+            use_container_width=True, hide_index=True
+        )
+        
         if st.button("통계 분석 실행", type="primary", use_container_width=True):
-            valid_f = ["일본건축", "일본재료", "전체평균(추천)"] if st_fck < 40 else ["과기부", "권영웅", "KALIS", "전체평균(추천)"]
-            filtered = label_df[label_df["적용공식"].isin(valid_f)]
-            data = sorted(filtered["추정강도"].tolist())
+            # [수정됨] 사용자가 선택한 데이터 그대로 분석 (강제 필터링 제거)
+            data = sorted(label_df["추정강도"].tolist())
+            
+            # [추가] 설계강도 대비 부적절한 공식 알림
+            current_formulas = set(label_df["적용공식"].unique())
+            recommended = set(["일본건축", "일본재료", "전체평균(추천)"] if st_fck < 40 else ["과기부", "권영웅", "KALIS", "전체평균(추천)"])
+            
+            if not current_formulas.issubset(recommended):
+                 st.warning(f"⚠️ 주의: 현재 설계강도({st_fck}MPa) 기준, 일부 선택된 공식은 적합하지 않을 수 있습니다.")
+
             if len(data) >= 2:
                 avg_v, std_v = np.mean(data), np.std(data, ddof=1)
+                
                 with st.container(border=True):
                     m1, m2, m3 = st.columns(3)
-                    m1.metric("평균", f"{avg_v:.2f} MPa", delta=f"{(avg_v/st_fck*100):.1f}%"); m2.metric("표준편차 (σ)", f"{std_v:.2f} MPa"); m3.metric("변동계수 (CV)", f"{(std_v/avg_v*100):.1f}%")
-                st.altair_chart(alt.Chart(pd.DataFrame({"번호": range(1, len(data)+1), "강도": data})).mark_bar().encode(x='번호:O', y='강도:Q', color=alt.condition(alt.datum.강도 >= st_fck, alt.value('#4D96FF'), alt.value('#FF6B6B'))) + alt.Chart(pd.DataFrame({'y':[st_fck]})).mark_rule(color='red', strokeDash=[5,3], size=2).encode(y='y'), use_container_width=True)
+                    m1.metric("평균", f"{avg_v:.2f} MPa", delta=f"{(avg_v/st_fck*100):.1f}%")
+                    m2.metric("표준편차 (σ)", f"{std_v:.2f} MPa")
+                    m3.metric("변동계수 (CV)", f"{(std_v/avg_v*100):.1f}%")
+                
+                chart = alt.Chart(pd.DataFrame({"번호": range(1, len(data)+1), "강도": data})).mark_bar().encode(
+                    x='번호:O', 
+                    y='강도:Q', 
+                    color=alt.condition(alt.datum.강도 >= st_fck, alt.value('#4D96FF'), alt.value('#FF6B6B'))
+                )
+                rule = alt.Chart(pd.DataFrame({'y':[st_fck]})).mark_rule(color='red', strokeDash=[5,3], size=2).encode(y='y')
+                
+                st.altair_chart(chart + rule, use_container_width=True)
