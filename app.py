@@ -81,33 +81,32 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
+# [개선 5] 세션 상태 초기화 (데이터 연동용)
+if 'rebound_data' not in st.session_state:
+    st.session_state['rebound_data'] = []
+
 # =========================================================
-# 2. 핵심 로직 및 함수 정의 (최적화 적용됨)
+# 2. 핵심 로직 및 함수 정의
 # =========================================================
 
-# [최적화 1] OCR 모델 캐싱 (매번 로드하지 않음)
 @st.cache_resource
 def load_ocr_model():
     import easyocr
-    # GPU가 없는 환경(Streamlit Cloud)을 고려하여 gpu=False 명시
     return easyocr.Reader(['en'], gpu=False)
 
 def extract_numbers_from_image(image_input):
     """
-    이미지를 받아 숫자를 추출합니다.
-    - 메모리 절약을 위한 리사이징
-    - 캐시된 모델 사용
+    [개선 1] OCR 전처리 강화 (적응형 이진화 및 모폴로지 연산 적용)
     """
     try:
         import cv2
         
-        # PIL 이미지로 변환 (이미 열려있는 경우 대응)
         if isinstance(image_input, Image.Image):
             image = image_input
         else:
             image = Image.open(image_input)
         
-        # [메모리 최적화] 이미지 크기 줄이기 (가로 800px 기준)
+        # 메모리 최적화 (리사이징)
         max_width = 800
         if image.width > max_width:
             ratio = max_width / float(image.width)
@@ -116,23 +115,34 @@ def extract_numbers_from_image(image_input):
 
         image_np = np.array(image)
         
-        # 전처리 (그레이스케일 -> 블러 -> 이진화)
+        # [개선된 전처리 로직]
+        # 1. 그레이스케일 변환
         gray = cv2.cvtColor(image_np, cv2.COLOR_RGB2GRAY)
-        blur = cv2.GaussianBlur(gray, (5, 5), 0)
-        _, binary = cv2.threshold(blur, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+        
+        # 2. 노이즈 제거 (Median Blur)
+        blur = cv2.medianBlur(gray, 3)
+        
+        # 3. 적응형 이진화 (조명 변화 대응)
+        binary = cv2.adaptiveThreshold(
+            blur, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, 
+            cv2.THRESH_BINARY, 11, 2
+        )
+        
+        # 4. 모폴로지 연산 (글자 끊김 방지)
+        kernel = np.ones((1, 1), np.uint8)
+        processed = cv2.dilate(binary, kernel, iterations=1)
         
         # 캐시된 모델 로드
         reader = load_ocr_model() 
         
-        # OCR 실행
-        result = reader.readtext(binary, detail=0, allowlist='0123456789. ')
+        # OCR 실행 (paragraph=False 권장)
+        result = reader.readtext(processed, detail=0, allowlist='0123456789. ')
         return " ".join(result)
 
     except Exception as e:
         print(f"⚠️ OCR 처리 중 오류 발생: {e}")
         return "" 
 
-# [최적화 2] 각도 보정 선형 보간 (Linear Interpolation) 적용
 def get_angle_correction(R_val, angle):
     try: angle = int(angle)
     except: angle = 0
@@ -148,18 +158,15 @@ def get_angle_correction(R_val, angle):
     if angle not in correction_table: return 0.0
     
     data = correction_table[angle]
-    sorted_keys = sorted(data.keys()) # [20, 30, 40, 50, 60]
+    sorted_keys = sorted(data.keys())
     
-    # 범위 밖 처리 (최솟값 미만, 최댓값 초과 시 경계값 사용)
     if R_val <= sorted_keys[0]: return data[sorted_keys[0]]
     if R_val >= sorted_keys[-1]: return data[sorted_keys[-1]]
     
-    # 선형 보간 (Linear Interpolation)
     for i in range(len(sorted_keys) - 1):
         k1, k2 = sorted_keys[i], sorted_keys[i+1]
         if k1 <= R_val <= k2:
             v1, v2 = data[k1], data[k2]
-            # 보간 공식: y = y1 + (x - x1) * ((y2 - y1) / (x2 - x1))
             return v1 + (R_val - k1) * (v2 - v1) / (k2 - k1)
             
     return 0.0
@@ -180,46 +187,58 @@ def get_age_coefficient(days):
             return c1 + (days - d1) / (d2 - d1) * (c2 - c1)
     return 1.0
 
-def calculate_strength(readings, angle, days, design_fck=24.0):
+def calculate_strength(readings, angle, days, design_fck=24.0, selected_formulas=None):
+    """
+    [개선 3] 공식 선택 유연성 확보 (selected_formulas 추가)
+    """
     if not readings or len(readings) < 5: return False, "데이터 부족 (최소 5개 이상)"
     
-    # 1. 1차 평균
     avg1 = sum(readings) / len(readings)
-    
-    # 2. 20% 타격법 (이상치 제거)
     valid = [r for r in readings if avg1 * 0.8 <= r <= avg1 * 1.2]
     excluded = [r for r in readings if r not in valid]
     
-    # 3. 기각 룰 적용 (20개 기준 5개 이상 기각 시 무효)
     if len(readings) >= 20 and len(excluded) > 4: return False, f"시험 무효 (기각 {len(excluded)}개)"
     if not valid: return False, "유효 데이터 없음"
     
-    # 4. 유효 반발경도 평균 및 보정
     R_avg = sum(valid) / len(valid)
-    corr = get_angle_correction(R_avg, angle) # 선형 보간 적용됨
+    corr = get_angle_correction(R_avg, angle)
     R0 = R_avg + corr
     age_c = get_age_coefficient(days)
     
-    # 5. 강도 추정식
+    # 전체 공식 계산
     f_aij = max(0, (7.3 * R0 + 100) * 0.098 * age_c)        
-    f_jsms = max(0, (1.27 * R0 - 18.0) * age_c)             
-    f_mst = max(0, (15.2 * R0 - 112.8) * 0.098 * age_c)     
-    f_kwon = max(0, (2.304 * R0 - 38.80) * age_c)           
+    f_jsms = max(0, (1.27 * R0 - 18.0) * age_c)              
+    f_mst = max(0, (15.2 * R0 - 112.8) * 0.098 * age_c)      
+    f_kwon = max(0, (2.304 * R0 - 38.80) * age_c)            
     f_kalis = max(0, (1.3343 * R0 + 8.1977) * age_c)
 
-    # 설계강도에 따른 적용 공식 선정 (참고용 Mean값 계산)
-    target_fs = [f_aij, f_jsms] if design_fck < 40 else [f_mst, f_kwon, f_kalis]
-    s_mean = np.mean(target_fs)
+    all_formulas = {"일본건축": f_aij, "일본재료": f_jsms, "과기부": f_mst, "권영웅": f_kwon, "KALIS": f_kalis}
+
+    # [개선 3 적용] 사용자 선택 공식이 있으면 그것만, 없으면 설계강도 기준 자동 추천
+    if selected_formulas:
+        target_fs = [val for key, val in all_formulas.items() if key in selected_formulas]
+    else:
+        target_fs = [f_aij, f_jsms] if design_fck < 40 else [f_mst, f_kwon, f_kalis]
+        
+    s_mean = np.mean(target_fs) if target_fs else 0
     
     return True, {
         "R_initial": avg1, "R_avg": R_avg, "Angle_Corr": corr, "R0": R0, 
         "Age_Coeff": age_c, "Discard": len(excluded), "Excluded": excluded, 
-        "Formulas": {"일본건축": f_aij, "일본재료": f_jsms, "과기부": f_mst, "권영웅": f_kwon, "KALIS": f_kalis}, 
+        "Formulas": all_formulas, # 모든 공식 값 반환
         "Mean_Strength": s_mean
     }
 
 def convert_df(df):
     return df.to_csv(index=False).encode('utf-8-sig')
+
+# [개선 2, 4] 엑셀 변환 헬퍼 함수
+def to_excel(df):
+    output = io.BytesIO()
+    # xlsxwriter 엔진 사용
+    with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
+        df.to_excel(writer, index=False, sheet_name='Result')
+    return output.getvalue()
 
 # =========================================================
 # 3. 메인 UI 구성
@@ -236,7 +255,7 @@ with st.sidebar:
 tab1, tab2, tab3, tab4 = st.tabs(["📖 점검 매뉴얼", "🔨 반발경도", "🧪 탄산화", "📈 통계·비교"])
 
 # ---------------------------------------------------------
-# [Tab 1] 점검 매뉴얼 (요청하신 대로 100% 유지)
+# [Tab 1] 점검 매뉴얼 (기존 유지)
 # ---------------------------------------------------------
 with tab1:
     st.subheader("💡 프로그램 사용 가이드")
@@ -298,7 +317,7 @@ with tab1:
         """)
 
 # ---------------------------------------------------------
-# [Tab 2] 반발경도 평가 (이미지 회전 기능 추가됨)
+# [Tab 2] 반발경도 평가
 # ---------------------------------------------------------
 with tab2:
     st.subheader("🔨 반발경도 정밀 강도 산정")
@@ -320,19 +339,17 @@ with tab2:
                 st.caption("💡 PC/노트북 웹캠을 사용할 때 적합합니다.")
                 img_file = st.camera_input("측정 기록표를 촬영하세요")
 
-            # [기능 추가] 이미지 회전 버튼 (OCR 인식률 향상)
             if img_file:
                 st.caption("이미지가 회전되어 보이면 아래 버튼으로 조정 후 [계산 실행]을 눌러주세요.")
                 rot_val = st.radio("이미지 회전(반시계)", [0, 90, 180, 270], index=0, horizontal=True, key="img_rot")
 
             if img_file is not None:
                 with st.spinner("이미지 처리 및 숫자 인식 중..."):
-                    # 1. PIL 이미지 열기 및 회전 적용
                     pil_image = Image.open(img_file)
                     if rot_val != 0:
                         pil_image = pil_image.rotate(rot_val, expand=True)
 
-                    # 2. 최적화된 OCR 함수 호출
+                    # [개선 1 적용된 함수 호출]
                     recognized_text = extract_numbers_from_image(pil_image)
                     
                     if recognized_text:
@@ -346,6 +363,11 @@ with tab2:
             with c2: days = st.number_input("재령(일)", 10, 10000, 3000)
             with c3: fck = st.number_input("설계강도(MPa)", 15.0, 100.0, 24.0)
             
+            # [개선 3] 공식 선택 옵션 추가
+            formula_opts = ["일본건축", "일본재료", "과기부", "권영웅", "KALIS"]
+            default_sels = ["일본건축", "일본재료"] if fck < 40 else ["과기부", "권영웅", "KALIS"]
+            selected_methods = st.multiselect("평균 산정 적용 공식 (미선택 시 설계강도 기준 자동추천)", formula_opts, default=default_sels)
+            
             default_txt = "54 56 55 53 58 55 54 55 52 57 55 56 54 55 59 42 55 56 54 55"
             if 'ocr_result' in st.session_state: default_txt = st.session_state['ocr_result']
             
@@ -353,7 +375,8 @@ with tab2:
             
         if st.button("계산 실행", type="primary", use_container_width=True):
             rd = [float(x) for x in txt.replace(',',' ').split() if x.strip()]
-            ok, res = calculate_strength(rd, angle, days, fck)
+            # [개선 3] selected_methods 전달
+            ok, res = calculate_strength(rd, angle, days, fck, selected_methods)
             if ok:
                 st.success(f"평균 추정 압축강도: **{res['Mean_Strength']:.2f} MPa**")
                 
@@ -365,6 +388,11 @@ with tab2:
                     with r3: st.metric("최종 R₀", f"{res['R0']:.1f}")
                     with r4: st.metric("재령 계수 α", f"{res['Age_Coeff']:.2f}")
 
+                # [개선 5] 데이터 연동 버튼
+                if st.button("➕ 통계 분석 목록에 추가", key="add_to_stats"):
+                    st.session_state['rebound_data'].append(res['Mean_Strength'])
+                    st.success(f"통계 탭 목록에 {res['Mean_Strength']:.2f} MPa 추가 완료!")
+
                 df_f = pd.DataFrame({"공식": res["Formulas"].keys(), "강도": res["Formulas"].values()})
                 chart = alt.Chart(df_f).mark_bar().encode(
                     x=alt.X('공식', sort=None), 
@@ -375,8 +403,25 @@ with tab2:
             else:
                 st.error(res)
     else:
-        # 다중 지점 (엑셀 업로드) - 오류 처리 강화
-        uploaded_file = st.file_uploader("CSV 또는 Excel 파일 업로드", type=["csv", "xlsx"])
+        # [개선 2] 엑셀 템플릿 다운로드 기능 추가
+        st.info("💡 엑셀 업로드 시 아래 양식을 다운로드하여 작성해주세요.")
+        
+        template_df = pd.DataFrame({
+            "지점": ["C1-1", "B2-3"],
+            "각도": [0, -90],
+            "재령": [3000, 3000],
+            "설계": [24, 24],
+            "데이터": ["45 46 44 48 50 49 45 46 44 48 50 49 45 46 44 48 50 49 45 46", "32 33 35 34 32 33 35 34 32 33 35 34 32 33 35 34 32 33 35 34"]
+        })
+        
+        st.download_button(
+            label="📥 입력 양식(엑셀) 다운로드",
+            data=to_excel(template_df),
+            file_name='반발경도_입력양식.xlsx',
+            mime='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+        )
+
+        uploaded_file = st.file_uploader("작성된 파일 업로드", type=["csv", "xlsx"])
         init_data = []
         if uploaded_file:
             try:
@@ -415,6 +460,7 @@ with tab2:
                 try:
                     rd_list = [float(x) for x in str(row["데이터"]).replace(',',' ').split() if x.replace('.','',1).isdigit()]
                     ang_v, age_v, fck_v = (0 if pd.isna(row["각도"]) else row["각도"]), (3000 if pd.isna(row["재령"]) else row["재령"]), (24 if pd.isna(row["설계"]) else row["설계"])
+                    # 배치 모드는 자동 추천 로직 사용
                     ok, res = calculate_strength(rd_list, ang_v, age_v, fck_v)
                     if ok:
                         data_entry = {
@@ -432,6 +478,19 @@ with tab2:
                 res_tab1, res_tab2 = st.tabs(["📋 요약", "🔍 세부 데이터"])
                 with res_tab1: st.dataframe(final_df[["지점", "설계", "추정강도", "강도비(%)"]], use_container_width=True, hide_index=True)
                 with res_tab2: st.dataframe(final_df, use_container_width=True, hide_index=True)
+                
+                # [개선 4] 결과 엑셀 다운로드 기능
+                st.divider()
+                st.subheader("💾 결과 저장")
+                
+                excel_data = to_excel(final_df)
+                st.download_button(
+                    label="📊 전체 결과 엑셀 다운로드",
+                    data=excel_data,
+                    file_name=f"{p_name}_반발경도_평가결과.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    type="primary"
+                )
 
 # ---------------------------------------------------------
 # [Tab 3] 탄산화 평가 (기존 유지)
@@ -467,13 +526,18 @@ with tab3:
         st.altair_chart(line + rule + point, use_container_width=True)
 
 # ---------------------------------------------------------
-# [Tab 4] 통계 및 비교 (필터링 로직 수정됨)
+# [Tab 4] 통계 및 비교 (세션 연동 적용)
 # ---------------------------------------------------------
 with tab4:
     st.subheader("📊 강도 통계 및 비교 분석")
     c1, c2 = st.columns([1, 2])
     with c1: st_fck = st.number_input("기준 설계강도(MPa)", 15.0, 100.0, 24.0, key="stat_fck")
-    with c2: raw_txt = st.text_area("강도 데이터 목록", "24.5 26.2 23.1 21.8 25.5 27.0", height=68)
+    
+    # [개선 5] 세션 상태의 데이터를 기본값으로 사용
+    session_data_str = " ".join([f"{x:.1f}" for x in st.session_state['rebound_data']])
+    default_stat_txt = session_data_str if session_data_str else "24.5 26.2 23.1 21.8 25.5 27.0"
+    
+    with c2: raw_txt = st.text_area("강도 데이터 목록 (반발경도 탭에서 추가된 데이터 포함)", default_stat_txt, height=68)
     
     parsed = [float(x) for x in raw_txt.replace(',',' ').split() if x.replace('.','',1).isdigit()]
     
@@ -491,10 +555,10 @@ with tab4:
         )
         
         if st.button("통계 분석 실행", type="primary", use_container_width=True):
-            # [수정됨] 사용자가 선택한 데이터 그대로 분석 (강제 필터링 제거)
+            # 사용자가 선택한 데이터 그대로 분석
             data = sorted(label_df["추정강도"].tolist())
             
-            # [추가] 설계강도 대비 부적절한 공식 알림
+            # 설계강도 대비 부적절한 공식 알림
             current_formulas = set(label_df["적용공식"].unique())
             recommended = set(["일본건축", "일본재료", "전체평균(추천)"] if st_fck < 40 else ["과기부", "권영웅", "KALIS", "전체평균(추천)"])
             
