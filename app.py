@@ -4,6 +4,7 @@ import pandas as pd
 import numpy as np
 import io
 import altair as alt
+import re
 from PIL import Image
 
 # =========================================================
@@ -87,9 +88,150 @@ def load_ocr_model():
     import easyocr
     return easyocr.Reader(['en'], gpu=False)
 
+
+def _normalize_ocr_token(text):
+    """OCR 오인식 문자를 숫자 파싱 친화적으로 정규화"""
+    replacements = {
+        'O': '0', 'o': '0',
+        'I': '1', 'l': '1', '|': '1',
+        ',': '.', ';': ':',
+    }
+    for src, dst in replacements.items():
+        text = text.replace(src, dst)
+    return text.strip()
+
+
+def _extract_numeric_candidates(ocr_result):
+    """easyocr detail=1 결과에서 숫자 후보를 추출"""
+    candidates = []
+    for item in ocr_result:
+        if len(item) < 3:
+            continue
+        bbox, raw_text, conf = item
+        text = _normalize_ocr_token(str(raw_text))
+        nums = re.findall(r'\d+(?:\.\d+)?', text)
+        if not nums:
+            continue
+
+        ys = [pt[1] for pt in bbox]
+        xs = [pt[0] for pt in bbox]
+        y_center = float(sum(ys) / len(ys))
+        x_center = float(sum(xs) / len(xs))
+        h = float(max(ys) - min(ys)) if ys else 0.0
+
+        for num in nums:
+            try:
+                val = float(num)
+                candidates.append({
+                    "value": val,
+                    "x": x_center,
+                    "y": y_center,
+                    "h": h,
+                    "conf": float(conf),
+                })
+            except Exception:
+                continue
+    return candidates
+
+
+def _cluster_rows(candidates):
+    """y 좌표 기반으로 OCR 숫자 후보를 행 단위로 군집화"""
+    if not candidates:
+        return []
+
+    heights = [c["h"] for c in candidates if c["h"] > 0]
+    row_tol = max(10.0, (float(np.median(heights)) * 0.75) if heights else 12.0)
+
+    sorted_by_y = sorted(candidates, key=lambda c: c["y"])
+    rows = []
+    for c in sorted_by_y:
+        if not rows:
+            rows.append([c])
+            continue
+
+        last_row = rows[-1]
+        last_y = float(np.mean([r["y"] for r in last_row]))
+        if abs(c["y"] - last_y) <= row_tol:
+            last_row.append(c)
+        else:
+            rows.append([c])
+
+    for row in rows:
+        row.sort(key=lambda c: c["x"])
+    return rows
+
+
+def _select_best_20_readings(ocr_result, target_count=20):
+    """
+    전표형(영수증형) 이미지에서 측정값 영역을 우선 추출하고
+    목표 개수(target_count, 기본 20개)에 맞춰 숫자 목록을 반환
+    """
+    candidates = _extract_numeric_candidates(ocr_result)
+    if not candidates:
+        return []
+
+    # 반발경도 범위 중심 후보 우선
+    plausible = [c for c in candidates if 10 <= c["value"] <= 100]
+    work = plausible if plausible else candidates
+
+    rows = _cluster_rows(work)
+    if not rows:
+        return []
+
+    # 측정치 블록은 하단에 밀집해 나타나는 경우가 많으므로, 하단의 다수 숫자 행 우선
+    measurement_rows = [r for r in rows if len(r) >= 3]
+    if measurement_rows:
+        selected_rows = measurement_rows[-max(4, min(6, len(measurement_rows))):]
+    else:
+        selected_rows = rows
+
+    ordered_values = [c["value"] for row in selected_rows for c in row]
+    ordered_keys = {(c["x"], c["y"], c["value"]) for row in selected_rows for c in row}
+
+    if len(ordered_values) >= target_count:
+        return ordered_values[:target_count]
+
+    # 부족하면 나머지 후보를 y/x 순서대로 보충
+    remain = [
+        c["value"]
+        for c in sorted(work, key=lambda c: (c["y"], c["x"]))
+        if (c["x"], c["y"], c["value"]) not in ordered_keys
+    ]
+    merged = []
+    for v in ordered_values + remain:
+        if len(merged) >= target_count:
+            break
+        merged.append(v)
+    return merged
+
+
+def _format_readings_for_text(values):
+    formatted = []
+    for v in values:
+        if abs(v - round(v)) < 1e-6:
+            formatted.append(str(int(round(v))))
+        else:
+            formatted.append(f"{v:.1f}")
+    return " ".join(formatted)
+
+
+def parse_readings_text(raw_text):
+    """텍스트 입력에서 숫자만 안전하게 파싱"""
+    if raw_text is None:
+        return []
+    normalized = _normalize_ocr_token(str(raw_text))
+    tokens = re.findall(r'[-+]?\d+(?:\.\d+)?', normalized)
+    vals = []
+    for t in tokens:
+        try:
+            vals.append(float(t))
+        except Exception:
+            continue
+    return vals
+
 def extract_numbers_from_image(image_input):
     """
-    OCR 전처리 강화 (적응형 이진화 및 모폴로지 연산 적용)
+    OCR 전처리 강화 + 전표형 측정지에서 20개 측정값 자동 추출
     """
     try:
         import cv2
@@ -106,19 +248,63 @@ def extract_numbers_from_image(image_input):
             image = image.resize((max_width, new_height), Image.Resampling.LANCZOS)
 
         image_np = np.array(image)
-
         gray = cv2.cvtColor(image_np, cv2.COLOR_RGB2GRAY)
         blur = cv2.medianBlur(gray, 3)
-        binary = cv2.adaptiveThreshold(
+
+        # 다양한 조건 대응을 위한 전처리 후보군
+        clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8)).apply(gray)
+        th_adapt = cv2.adaptiveThreshold(
             blur, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
             cv2.THRESH_BINARY, 11, 2
         )
-        kernel = np.ones((1, 1), np.uint8)
-        processed = cv2.dilate(binary, kernel, iterations=1)
+        _, th_otsu = cv2.threshold(blur, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+        _, th_clahe_otsu = cv2.threshold(clahe, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+        morph = cv2.morphologyEx(th_adapt, cv2.MORPH_CLOSE, np.ones((2, 2), np.uint8), iterations=1)
 
+        variants = [gray, th_adapt, th_otsu, th_clahe_otsu, morph]
         reader = load_ocr_model()
-        result = reader.readtext(processed, detail=0, allowlist='0123456789. ')
-        return " ".join(result)
+
+        best_values = []
+        best_score = -1e9
+
+        for processed in variants:
+            result_detail = reader.readtext(
+                processed,
+                detail=1,
+                paragraph=False,
+                allowlist='0123456789.:- '
+            )
+            values = _select_best_20_readings(result_detail, target_count=20)
+
+            # 목표 20개 충족, 값 범위, 평균 confidence를 종합 점수화
+            score = len(values) * 5
+            if len(values) >= 20:
+                score += 100
+            in_range = sum(1 for v in values if 10 <= v <= 100)
+            score += in_range * 2
+
+            confs = [float(item[2]) for item in result_detail if len(item) >= 3]
+            if confs:
+                score += float(np.mean(confs)) * 10
+
+            if score > best_score:
+                best_score = score
+                best_values = values
+
+        # 실패 시 기존 방식처럼 전체 숫자라도 최대한 반환
+        if not best_values:
+            fallback = reader.readtext(gray, detail=0, allowlist='0123456789. ')
+            fallback_nums = []
+            for token in fallback:
+                nums = re.findall(r'\d+(?:\.\d+)?', _normalize_ocr_token(str(token)))
+                for n in nums:
+                    try:
+                        fallback_nums.append(float(n))
+                    except Exception:
+                        pass
+            best_values = fallback_nums[:20]
+
+        return _format_readings_for_text(best_values)
 
     except Exception as e:
         print(f"⚠️ OCR 처리 중 오류 발생: {e}")
@@ -411,7 +597,7 @@ with tab1:
             "대상 부재 예시": ["슬래브 하부 (천장)", "보 경사면", "벽체, 기둥 측면", "교대/교각 경사부", "슬래브 상면 (바닥)"]
         })
         st.table(m_df)
-        st.info("※ 본 프로그램은 각도 선택 시 엑셀(1. 원본) 보정식(2차식)을 그대로 적용하여 $R_0$를 산정합니다.")
+        st.info("※ 본 프로그램은 각도 선택  엑셀(1. 원본) 보정식(2차식)을 그대로 적용하여 $R_0$를 산정합니다.")
 
     with st.expander("2. 탄산화 깊이 측정 (Carbonation Test) 상세 지침", expanded=False):
         st.markdown("""
@@ -474,7 +660,10 @@ with tab2:
 
                     if recognized_text:
                         st.session_state['ocr_result'] = recognized_text
-                        st.success(f"인식 성공: {recognized_text}")
+                        ocr_vals = parse_readings_text(recognized_text)
+                        st.success(f"인식 성공 ({len(ocr_vals)}개): {recognized_text}")
+                        if len(ocr_vals) != 20:
+                            st.warning("자동 인식값이 20개가 아닙니다. 아래 입력창에서 확인/수정 후 계산하세요.")
                     else:
                         st.warning("숫자를 인식하지 못했습니다. 직접 입력해주세요.")
 
@@ -505,7 +694,7 @@ with tab2:
             txt = st.text_area("측정값 (자동 인식 결과 수정 가능)", value=default_txt, height=80)
 
         if st.button("계산 실행", type="primary", use_container_width=True):
-            rd = [float(x) for x in txt.replace(',', ' ').split() if x.strip()]
+            rd = parse_readings_text(txt)
             ok, res = calculate_strength(
                 rd, angle, days,
                 design_fck=fck,
