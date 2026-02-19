@@ -98,6 +98,16 @@ st.markdown("""
 if 'rebound_data' not in st.session_state:
     st.session_state['rebound_data'] = []
 
+
+def is_mobile_client():
+    """간단한 UA 기반 모바일/태블릿 판별"""
+    try:
+        ua = str(st.context.headers.get("user-agent", "")).lower()
+    except Exception:
+        ua = ""
+    mobile_keys = ["android", "iphone", "ipad", "mobile", "tablet"]
+    return any(k in ua for k in mobile_keys)
+
 # =========================================================
 # 2. 핵심 로직 및 함수 정의
 # =========================================================
@@ -248,7 +258,7 @@ def parse_readings_text(raw_text):
             continue
     return vals
 
-def extract_numbers_from_image(image_input):
+def extract_numbers_from_image(image_input, ocr_mode="정밀"):
     """
     OCR 전처리 강화 + 전표형 측정지에서 20개 측정값 자동 추출
     """
@@ -280,7 +290,10 @@ def extract_numbers_from_image(image_input):
         _, th_clahe_otsu = cv2.threshold(clahe, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
         morph = cv2.morphologyEx(th_adapt, cv2.MORPH_CLOSE, np.ones((2, 2), np.uint8), iterations=1)
 
-        variants = [gray, th_adapt, th_otsu, th_clahe_otsu, morph]
+        if ocr_mode == "빠른":
+            variants = [gray, th_adapt]
+        else:
+            variants = [gray, th_adapt, th_otsu, th_clahe_otsu, morph]
         reader = load_ocr_model()
 
         best_values = []
@@ -418,7 +431,7 @@ def calculate_strength(
 
     # 20점 기준에서 5개 이상 기각이면 무효
     if len(excluded) >= 5:
-        return False, f"시험 효: 기각 {len(excluded)}개(20% 이상) → 재시험 권장"
+        return False, f"시험 무효: 기각 {len(excluded)}개(20% 이상) → 재시험 권장"
 
     if len(valid) == 0:
         return False, "유효 데이터 없음 (±20% 범위 내 값이 없습니다)"
@@ -647,11 +660,23 @@ with tab1:
 with tab2:
     st.subheader("🔨 반발경도 정밀 강도 산정")
 
-    mode = st.radio("입력 방식", ["단일 지점 (카메라/파)", "다중 지점 (엑셀 업로드)"], horizontal=True)
+    mobile_client = is_mobile_client()
+    if mobile_client:
+        st.caption("📱 모바일/태블릿 최적화 모드")
+
+    mode = st.radio("입력 방식", ["단일 지점 (카메라/파일)", "다중 지점 (엑셀 업로드)"], horizontal=True)
 
     if mode.startswith("단일"):
         with st.container(border=True):
             st.markdown("##### 📸 측정값 입력")
+
+            ocr_mode = st.radio(
+                "OCR 처리 모드",
+                ["빠른", "정밀"],
+                horizontal=not mobile_client,
+                index=1,
+                help="빠른: 처리속도 우선 / 정밀: 인식률 우선"
+            )
 
             cam_mode = st.toggle("💻 웹캠(PC) 모드로 전환하기", value=False)
 
@@ -675,7 +700,7 @@ with tab2:
                     if rot_val != 0:
                         pil_image = pil_image.rotate(rot_val, expand=True)
 
-                    recognized_text = extract_numbers_from_image(pil_image)
+                    recognized_text = extract_numbers_from_image(pil_image, ocr_mode=ocr_mode)
 
                     if recognized_text:
                         st.session_state['ocr_result'] = recognized_text
@@ -686,20 +711,30 @@ with tab2:
                     else:
                         st.warning("숫자를 인식하지 못했습니다. 직접 입력해주세요.")
 
-            # ---- 입력 파라미터: Ct 추가(수정 5) ----
-            c1, c2, c3, c4 = st.columns(4)
-            with c1:
+            # ---- 입력 파라미터: 모바일은 단일 컬럼, 데스크톱은 4열 ----
+            if mobile_client:
                 angle = st.selectbox(
                     "타격 방향",
                     [90, 45, 0, -45, -90],
                     format_func=lambda x: {90:"+90°(상향수직)", 45:"+45°(상향경사)", 0:"0°(수평)", -45:"-45°(하향경사)", -90:"-90°(하향수직)"}[x]
                 )
-            with c2:
                 days = st.number_input("재령(일)", 10, 10000, 3000)
-            with c3:
                 fck = st.number_input("설계강도(MPa)", 15.0, 100.0, 24.0)
-            with c4:
                 ct = st.number_input("코어 보정계수 Ct", 0.10, 2.00, 1.00, step=0.01)
+            else:
+                c1, c2, c3, c4 = st.columns(4)
+                with c1:
+                    angle = st.selectbox(
+                        "타격 방향",
+                        [90, 45, 0, -45, -90],
+                        format_func=lambda x: {90:"+90°(상향수직)", 45:"+45°(상향경사)", 0:"0°(수평)", -45:"-45°(하향경사)", -90:"-90°(하향수직)"}[x]
+                    )
+                with c2:
+                    days = st.number_input("재령(일)", 10, 10000, 3000)
+                with c3:
+                    fck = st.number_input("설계강도(MPa)", 15.0, 100.0, 24.0)
+                with c4:
+                    ct = st.number_input("코어 보정계수 Ct", 0.10, 2.00, 1.00, step=0.01)
 
             # 공식 선택 옵션
             formula_opts = ["일본재료", "일본건축", "과기부", "권영웅", "KALIS"]
@@ -710,7 +745,29 @@ with tab2:
             if 'ocr_result' in st.session_state:
                 default_txt = st.session_state['ocr_result']
 
-            txt = st.text_area("측정값 (자동 인식 결과 수정 가능)", value=default_txt, height=80)
+            txt = st.text_area("측정값 (자동 인식 결과 수정 가능)", value=default_txt, height=120 if mobile_client else 80)
+
+            # OCR 결과를 20칸 편집 UI로 제공
+            preview_vals = parse_readings_text(default_txt)
+            base_vals = (preview_vals + [np.nan] * 20)[:20]
+            grid_df = pd.DataFrame({
+                "No": list(range(1, 21)),
+                "측정값": base_vals
+            })
+            edited_grid = st.data_editor(
+                grid_df,
+                column_config={
+                    "No": st.column_config.NumberColumn("No", disabled=True),
+                    "측정값": st.column_config.NumberColumn("측정값", min_value=0.0, max_value=100.0, step=0.1),
+                },
+                hide_index=True,
+                use_container_width=True,
+                key="ocr_20_grid"
+            )
+
+            valid_grid_vals = [float(v) for v in edited_grid["측정값"].tolist() if not pd.isna(v)]
+            if valid_grid_vals:
+                txt = " ".join([str(int(v)) if abs(v-round(v)) < 1e-6 else f"{v:.1f}" for v in valid_grid_vals])
 
         if st.button("계산 실행", type="primary", use_container_width=True):
             rd = parse_readings_text(txt)
@@ -722,13 +779,13 @@ with tab2:
                 require_20_points=True
             )
             if ok:
-                st.success(f"평균 추정 축강도(코어보정 반영): **{res['Mean_Strength']:.2f} MPa**")
+                st.success(f"평균 추정 압축강도(코어보정 반영): **{res['Mean_Strength']:.2f} MPa**")
 
                 with st.container(border=True):
                     r1, r2, r3 = st.columns(3)
                     r1.metric("유효 평균 R", f"{res['R_avg']:.3f}")
                     r2.metric("각도 보정 ΔR(엑셀식)", f"{res['Angle_Corr']:+.6f}")
-                    r3.metric("측정점수/기각", f"{res['N']} / {res['Discard']}")
+                    r3.metric("정점수/기각", f"{res['N']} / {res['Discard']}")
 
                     r4, r5, r6 = st.columns(3)
                     r4.metric("최종 R₀", f"{res['R0']:.6f}")
@@ -999,3 +1056,4 @@ with tab4:
                 st.altair_chart(chart + rule, use_container_width=True)
             else:
                 st.warning("통계 분석을 위해서는 최소 2개 이상의 데이터가 필요합니다.")
+
