@@ -72,6 +72,13 @@ st.markdown("""
     [data-testid="stMetricLabel"] { font-size: 0.9rem !important; }
     .calc-box { background-color: #f8f9fa; padding: 15px; border-radius: 10px; border-left: 5px solid #1f77b4; margin-bottom: 15px; }
     div[data-testid="stTable"] { overflow-x: auto; }
+
+    /* 모바일에서 좌측 접힘 컨트롤(아이콘 텍스트 노출) 숨김 */
+    @media (max-width: 768px) {
+        [data-testid="collapsedControl"] { display: none !important; }
+        [data-testid="stHeader"] { height: 0 !important; }
+        .block-container { padding-top: 0.5rem !important; }
+    }
     </style>
 """, unsafe_allow_html=True)
 
@@ -291,7 +298,7 @@ def extract_numbers_from_image(image_input):
                 best_score = score
                 best_values = values
 
-        # 실패 시 기존 방식처럼 전체 숫자라도 최대한 반환
+        # 실패 시 기존 방식처 전체 숫자라도 최대한 반환
         if not best_values:
             fallback = reader.readtext(gray, detail=0, allowlist='0123456789. ')
             fallback_nums = []
@@ -597,7 +604,7 @@ with tab1:
             "대상 부재 예시": ["슬래브 하부 (천장)", "보 경사면", "벽체, 기둥 측면", "교대/교각 경사부", "슬래브 상면 (바닥)"]
         })
         st.table(m_df)
-        st.info("※ 본 프로그램은 각도 선택  엑셀(1. 원본) 보정식(2차식)을 그대로 적용하여 $R_0$를 산정합니다.")
+        st.info("※ 본 프로그램은 각도 선택 시 엑셀(1. 원본) 보정식(2차식)을 그대로 적용하여 $R_0$를 산정합니다.")
 
     with st.expander("2. 탄산화 깊이 측정 (Carbonation Test) 상세 지침", expanded=False):
         st.markdown("""
