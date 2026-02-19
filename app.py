@@ -60,6 +60,15 @@ st.markdown("""
         flex-shrink: 0 !important;
         display: block !important;
     }
+    /* 일부 모바일 환경에서 아이콘 폰트가 텍스트(arrow_right)로 노출되는 현상 대응 */
+    div[data-testid="stExpander"] details > summary [class*="material"],
+    div[data-testid="stExpander"] details > summary [data-testid*="icon"],
+    div[data-testid="stExpander"] details > summary [aria-hidden="true"] {
+        display: none !important;
+    }
+    div[data-testid="stExpander"] details > summary {
+        padding-left: 12px !important;
+    }
     div[data-testid="stExpander"] details > summary p {
         font-size: 15px;
         font-weight: 600;
@@ -78,6 +87,9 @@ st.markdown("""
         [data-testid="collapsedControl"] { display: none !important; }
         [data-testid="stHeader"] { height: 0 !important; }
         .block-container { padding-top: 0.5rem !important; }
+        div[data-testid="stExpander"] details > summary {
+            padding-left: 10px !important;
+        }
     }
     </style>
 """, unsafe_allow_html=True)
@@ -298,7 +310,7 @@ def extract_numbers_from_image(image_input):
                 best_score = score
                 best_values = values
 
-        # 실패 시 기존 방식처 전체 숫자라도 최대한 반환
+        # 실패 시 기존 방식처럼 전체 숫자라도 최대한 반환
         if not best_values:
             fallback = reader.readtext(gray, detail=0, allowlist='0123456789. ')
             fallback_nums = []
@@ -406,7 +418,7 @@ def calculate_strength(
 
     # 20점 기준에서 5개 이상 기각이면 무효
     if len(excluded) >= 5:
-        return False, f"시험 무효: 기각 {len(excluded)}개(20% 이상) → 재시험 권장"
+        return False, f"시험 효: 기각 {len(excluded)}개(20% 이상) → 재시험 권장"
 
     if len(valid) == 0:
         return False, "유효 데이터 없음 (±20% 범위 내 값이 없습니다)"
@@ -635,7 +647,7 @@ with tab1:
 with tab2:
     st.subheader("🔨 반발경도 정밀 강도 산정")
 
-    mode = st.radio("입력 방식", ["단일 지점 (카메라/파일)", "다중 지점 (엑셀 업로드)"], horizontal=True)
+    mode = st.radio("입력 방식", ["단일 지점 (카메라/파)", "다중 지점 (엑셀 업로드)"], horizontal=True)
 
     if mode.startswith("단일"):
         with st.container(border=True):
@@ -710,7 +722,7 @@ with tab2:
                 require_20_points=True
             )
             if ok:
-                st.success(f"평균 추정 압축강도(코어보정 반영): **{res['Mean_Strength']:.2f} MPa**")
+                st.success(f"평균 추정 축강도(코어보정 반영): **{res['Mean_Strength']:.2f} MPa**")
 
                 with st.container(border=True):
                     r1, r2, r3 = st.columns(3)
