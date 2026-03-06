@@ -323,6 +323,7 @@ def extract_numbers_from_image(image_input, ocr_mode="정밀"):
             variants = [gray, th_adapt]
         else:
             variants = [gray, th_adapt, th_otsu, th_clahe_otsu, morph]
+
         reader = load_ocr_model()
 
         best_values = []
@@ -371,6 +372,7 @@ def extract_numbers_from_image(image_input, ocr_mode="정밀"):
         logger.exception("OCR 처리 중 오류 발생: %s", e)
         return ""
 
+
 # ---------------------------------------------------------
 # [수정 1] 타격방향 보정(ΔR) : 엑셀(1. 원본) 2차식 그대로
 # ---------------------------------------------------------
@@ -416,12 +418,13 @@ def get_age_coefficient(days):
         return age_table[sorted_days[0]]
 
     for i in range(len(sorted_days) - 1):
-        d1, d2 = sorted_days[i], sorted_days[i+1]
+        d1, d2 = sorted_days[i], sorted_days[i + 1]
         if d1 <= days <= d2:
             c1, c2 = age_table[d1], age_table[d2]
             return c1 + (days - d1) / (d2 - d1) * (c2 - c1)
 
     return 1.0
+
 
 # ---------------------------------------------------------
 # [수정 2,3,5] 20점 기준 + 마스크 기반 기각 + Ct 반영
@@ -486,19 +489,18 @@ def calculate_strength(
         return False, "코어 보정계수(Ct)는 0보다 커야 합니다."
 
     # 강도식 (원값)
-    f_jsms  = max(0.0, (1.27  * R0 - 18.0)          * age_c)              # 일본재료학회
-    f_aij   = max(0.0, (7.3   * R0 + 100.0) * 0.098 * age_c)              # 일본건축학회
-    f_mst   = max(0.0, (15.2  * R0 - 112.8) * 0.098 * age_c)              # 과기부(고강도)
-    # 기존 코드 유지(요청 범위 밖이지만, 옵션으로 남김)
-    f_kwon  = max(0.0, (2.304 * R0 - 38.80)         * age_c)              # 권영웅
-    f_kalis = max(0.0, (1.3343 * R0 + 8.1977)       * age_c)              # KALIS(근거가 따로 있을 때)
+    f_jsms = max(0.0, (1.27 * R0 - 18.0) * age_c)                # 일본재료학회
+    f_aij = max(0.0, (7.3 * R0 + 100.0) * 0.098 * age_c)         # 일본건축학회
+    f_mst = max(0.0, (15.2 * R0 - 112.8) * 0.098 * age_c)        # 과기부(고강도)
+    f_kwon = max(0.0, (2.304 * R0 - 38.80) * age_c)              # 권영웅
+    f_kalis = max(0.0, (1.3343 * R0 + 8.1977) * age_c)           # KALIS
 
     all_formulas_raw = {
         "일본재료": f_jsms,
         "일본건축": f_aij,
-        "과기부":   f_mst,
-        "권영웅":   f_kwon,
-        "KALIS":    f_kalis,
+        "과기부": f_mst,
+        "권영웅": f_kwon,
+        "KALIS": f_kalis,
     }
 
     # Ct 반영
@@ -508,7 +510,7 @@ def calculate_strength(
     if selected_formulas:
         target_fs = [all_formulas[k] for k in selected_formulas if k in all_formulas]
     else:
-        # 설계강도 기준 자동추천 로직(기존 유지)
+        # 설계강도 기준 자동추천 로직
         target_fs = ([all_formulas["일본건축"], all_formulas["일본재료"]]
                      if design_fck < 40
                      else [all_formulas["과기부"], all_formulas["권영웅"], all_formulas["KALIS"]])
@@ -578,14 +580,14 @@ def run_validation_tests():
         design_fck=40.0, selected_formulas=["일본재료", "일본건축", "과기부"],
         core_coeff=1.0, require_20_points=True
     )
-    # 엑셀 기대값(반올림/허용오차)
+
     exp_Ravg = 59.195
     exp_dR = -3.680913945
     exp_R0 = 55.514086055
     exp_age = 0.63
-    exp_jsms = 33.0768202086   # 일본재료
-    exp_aij  = 31.194309588372 # 일본건축
-    exp_mst  = 45.132810978528 # 과기부
+    exp_jsms = 33.0768202086
+    exp_aij = 31.194309588372
+    exp_mst = 45.132810978528
 
     def close(a, b, tol=1e-6):
         return abs(a - b) <= tol
@@ -597,30 +599,31 @@ def run_validation_tests():
         close(res["R0"], exp_R0, 1e-6) and
         close(res["Age_Coeff"], exp_age, 1e-12) and
         close(res["Formulas"]["일본재료"], exp_jsms, 1e-6) and
-        close(res["Formulas"]["일본건축"], exp_aij,  1e-6) and
-        close(res["Formulas"]["과기부"],   exp_mst,  1e-6)
+        close(res["Formulas"]["일본건축"], exp_aij, 1e-6) and
+        close(res["Formulas"]["과기부"], exp_mst, 1e-6)
     )
     results.append(("TC1(엑셀 일치)", tc1_pass, res if ok else res))
 
     # ----- TC2: outlier 2개 -> 기각 2개 -----
-    base = [50]*18 + [10, 90]  # 평균=50, 10/90은 ±20% 밖(40~60 밖) -> 2개 기각
+    base = [50] * 18 + [10, 90]
     ok2, res2 = calculate_strength(base, angle=0, days=3000, design_fck=24, core_coeff=1.0, require_20_points=True)
     tc2_pass = ok2 and (res2["Discard"] == 2)
     results.append(("TC2(기각 2개, 무효X)", tc2_pass, res2 if ok2 else res2))
 
     # ----- TC3: outlier 5개 -> 무효 -----
-    base3 = [50]*15 + [10, 90, 10, 90, 10]  # 기각 5개 -> 무효
+    base3 = [50] * 15 + [10, 90, 10, 90, 10]
     ok3, res3 = calculate_strength(base3, angle=0, days=3000, design_fck=24, core_coeff=1.0, require_20_points=True)
     tc3_pass = (not ok3) and ("시험 무효" in str(res3))
     results.append(("TC3(기각 5개, 무효)", tc3_pass, res3))
 
-    # ----- TC4: Ct=1.10 배율 확인(TC1 기반) -----
+    # ----- TC4: Ct=1.10 배율 확인 -----
     ok4a, res4a = calculate_strength(readings_tc1, angle=90, days=3000, design_fck=40, core_coeff=1.0, require_20_points=True)
     ok4b, res4b = calculate_strength(readings_tc1, angle=90, days=3000, design_fck=40, core_coeff=1.10, require_20_points=True)
-    tc4_pass = ok4a and ok4b and close(res4b["Formulas"]["과기부"], res4a["Formulas"]["과기부"]*1.10, 1e-6)
+    tc4_pass = ok4a and ok4b and close(res4b["Formulas"]["과기부"], res4a["Formulas"]["과기부"] * 1.10, 1e-6)
     results.append(("TC4(Ct 배율)", tc4_pass, {"MST@1.0": res4a["Formulas"]["과기부"], "MST@1.10": res4b["Formulas"]["과기부"]}))
 
     return results
+
 
 # =========================================================
 # 3. 메인 UI 구성
@@ -772,7 +775,7 @@ with tab2:
                 angle = st.selectbox(
                     "타격 방향",
                     [90, 45, 0, -45, -90],
-                    format_func=lambda x: {90:"+90°(상향수직)", 45:"+45°(상향경사)", 0:"0°(수평)", -45:"-45°(하향경사)", -90:"-90°(하향수직)"}[x]
+                    format_func=lambda x: {90: "+90°(상향수직)", 45: "+45°(상향경사)", 0: "0°(수평)", -45: "-45°(하향경사)", -90: "-90°(하향수직)"}[x]
                 )
                 days = st.number_input("재령(일)", 10, 10000, 3000)
                 fck = st.number_input("설계강도(MPa)", 15.0, 100.0, 24.0)
@@ -783,7 +786,7 @@ with tab2:
                     angle = st.selectbox(
                         "타격 방향",
                         [90, 45, 0, -45, -90],
-                        format_func=lambda x: {90:"+90°(상향수직)", 45:"+45°(상향경사)", 0:"0°(수평)", -45:"-45°(하향경사)", -90:"-90°(하향수직)"}[x]
+                        format_func=lambda x: {90: "+90°(상향수직)", 45: "+45°(상향경사)", 0: "0°(수평)", -45: "-45°(하향경사)", -90: "-90°(하향수직)"}[x]
                     )
                 with c2:
                     days = st.number_input("재령(일)", 10, 10000, 3000)
@@ -803,7 +806,7 @@ with tab2:
 
             txt = st.text_area("측정값 (자동 인식 결과 수정 가능)", value=default_txt, height=120 if mobile_client else 80)
 
-            # OCR 결과를 20칸 편집 UI로 제공 (txt 기준으로 동기화)
+            # OCR 결과를 20칸 편집 UI로 제공 (txt 기준 동기화)
             preview_vals = parse_readings_text(txt)
             base_vals = (preview_vals + [np.nan] * 20)[:20]
             grid_df = pd.DataFrame({
@@ -818,15 +821,15 @@ with tab2:
                     "측정값": st.column_config.NumberColumn("측정값", min_value=0.0, max_value=100.0, step=0.1),
                 },
                 hide_index=True,
-                width="stretch",
+                use_container_width=True,
                 key=grid_key
             )
 
             valid_grid_vals = [float(v) for v in edited_grid["측정값"].tolist() if not pd.isna(v)]
             if valid_grid_vals:
-                txt = " ".join([str(int(v)) if abs(v-round(v)) < 1e-6 else f"{v:.1f}" for v in valid_grid_vals])
+                txt = " ".join([str(int(v)) if abs(v - round(v)) < 1e-6 else f"{v:.1f}" for v in valid_grid_vals])
 
-        if st.button("계산 실행", type="primary", width="stretch"):
+        if st.button("계산 실행", type="primary", use_container_width=True):
             rd = parse_readings_text(txt)
             ok, res = calculate_strength(
                 rd, angle, days,
@@ -860,10 +863,9 @@ with tab2:
                     y='강도',
                     color=alt.condition(alt.datum.강도 >= fck, alt.value('#4D96FF'), alt.value('#FF6B6B'))
                 ).properties(height=350)
-                st.altair_chart(
-                    chart + alt.Chart(pd.DataFrame({'y': [fck]})).mark_rule(color='red', strokeDash=[5, 3], size=2).encode(y='y'),
-                    width="stretch"
-                )
+
+                rule_chart = alt.Chart(pd.DataFrame({'y': [fck]})).mark_rule(color='red', strokeDash=[5, 3], size=2).encode(y='y')
+                st.altair_chart(chart + rule_chart, use_container_width=True)
             else:
                 st.error(res)
 
@@ -898,6 +900,7 @@ with tab2:
 
         uploaded_file = st.file_uploader("작성된 파일 업로드", type=["csv", "xlsx"])
         init_data = []
+
         if uploaded_file:
             try:
                 if uploaded_file.name.endswith('.csv'):
@@ -914,10 +917,11 @@ with tab2:
                             "재령": _safe_num(row.get("재령", 3000), 3000, int),
                             "설계": _safe_num(row.get("설계", 24.0), 24.0, float),
                             "Ct": _safe_num(row.get("Ct", 1.0), 1.0, float),
-                            "데이터": str(row.get("데이터", "")),
+                            "데이터": str(row.get("데이터", ""))
                         })
                     except Exception as row_err:
                         logger.warning("업로드 %s행 파싱 실패: %s", idx + 1, row_err)
+
             except ImportError:
                 st.error("엑셀 파일을 읽으려면 'openpyxl' 라이브러리가 필요합니다.")
             except Exception as e:
@@ -933,12 +937,12 @@ with tab2:
                 "설계": st.column_config.NumberColumn("설계", default=24),
                 "Ct": st.column_config.NumberColumn("Ct", default=1.00),
             },
-            width="stretch",
+            use_container_width=True,
             hide_index=True,
             num_rows="dynamic"
         )
 
-        if st.button("🚀 일괄 계산 실행", type="primary", width="stretch"):
+        if st.button("🚀 일괄 계산 실행", type="primary", use_container_width=True):
             batch_res = []
             for _, row in edited_df.iterrows():
                 if not row.get("선택", True):
@@ -980,7 +984,6 @@ with tab2:
 
                         batch_res.append(data_entry)
                     else:
-                        # 실패 케이스도 기록(원하면)
                         batch_res.append({
                             "지점": row.get("지점", "P"),
                             "설계": float(fck_v),
@@ -1007,9 +1010,9 @@ with tab2:
                 with res_tab1:
                     cols = ["지점", "설계", "Ct", "추정강도", "강도비(%)"]
                     cols = [c for c in cols if c in final_df.columns]
-                    st.dataframe(final_df[cols], width="stretch", hide_index=True)
+                    st.dataframe(final_df[cols], use_container_width=True, hide_index=True)
                 with res_tab2:
-                    st.dataframe(final_df, width="stretch", hide_index=True)
+                    st.dataframe(final_df, use_container_width=True, hide_index=True)
 
                 st.divider()
                 st.subheader("💾 결과 저장")
@@ -1026,7 +1029,7 @@ with tab2:
                     st.error(str(e))
 
 # ---------------------------------------------------------
-# [Tab 3] 탄산화 평가 (기존 유지)
+# [Tab 3] 탄산화 평가
 # ---------------------------------------------------------
 with tab3:
     st.subheader("🧪 탄산화 깊이 및 상세 분석")
@@ -1039,10 +1042,10 @@ with tab3:
         with c3:
             a_years = st.number_input("경과 년수(년)", 1, 100, 20)
 
-    if st.button("평가 실행", type="primary", key="btn_carb_run", width="stretch"):
+    if st.button("평가 실행", type="primary", key="btn_carb_run", use_container_width=True):
         rate_a = m_depth / math.sqrt(a_years) if a_years > 0 else 0
         rem = d_cover - m_depth
-        total_life = (d_cover / rate_a)**2 if rate_a > 0 else 99.9
+        total_life = (d_cover / rate_a) ** 2 if rate_a > 0 else 99.9
         res_life = total_life - a_years
 
         grade, color = ("A", "green") if rem >= 30 else (("B", "blue") if rem >= 10 else (("C", "orange") if rem >= 0 else ("D", "red")))
@@ -1062,9 +1065,9 @@ with tab3:
             x=alt.X('경과년수', title='경과년수 (년)'),
             y=alt.Y('탄산화깊이', title='탄산화 깊이 (mm)')
         )
-        rule = alt.Chart(pd.DataFrame({'y': [d_cover]})).mark_rule(color='red', strokeDash=[5,5], size=2).encode(y='y')
+        rule = alt.Chart(pd.DataFrame({'y': [d_cover]})).mark_rule(color='red', strokeDash=[5, 5], size=2).encode(y='y')
         point = alt.Chart(pd.DataFrame({'x': [a_years], 'y': [m_depth]})).mark_point(color='orange', size=100, filled=True).encode(x='x', y='y')
-        st.altair_chart(line + rule + point, width="stretch")
+        st.altair_chart(line + rule + point, use_container_width=True)
 
 # ---------------------------------------------------------
 # [Tab 4] 통계 및 비교 (세션 연동 적용)
@@ -1092,10 +1095,11 @@ with tab4:
                 "순번": st.column_config.NumberColumn("No.", disabled=True),
                 "적용공식": st.column_config.SelectboxColumn("공식 선택", options=["일본건축", "일본재료", "과기부", "권영웅", "KALIS", "전체평균(추천)"], required=True)
             },
-            width="stretch", hide_index=True
+            use_container_width=True,
+            hide_index=True
         )
 
-        if st.button("통계 분석 실행", type="primary", width="stretch"):
+        if st.button("통계 분석 실행", type="primary", use_container_width=True):
             strength_series = pd.to_numeric(label_df["추정강도"], errors="coerce").dropna()
             data = sorted(strength_series.astype(float).tolist())
 
@@ -1112,18 +1116,18 @@ with tab4:
 
                 with st.container(border=True):
                     m1, m2, m3 = st.columns(3)
-                    m1.metric("평균", f"{avg_v:.2f} MPa", delta=f"{(avg_v/st_fck*100):.1f}%")
+                    m1.metric("평균", f"{avg_v:.2f} MPa", delta=f"{(avg_v / st_fck * 100):.1f}%")
                     m2.metric("표준편차 (σ)", f"{std_v:.2f} MPa")
                     m3.metric("변동계수 (CV)", f"{cv_v:.1f}%" if np.isfinite(cv_v) else "N/A")
 
-                chart = alt.Chart(pd.DataFrame({"번호": range(1, len(data)+1), "강도": data})).mark_bar().encode(
+                chart = alt.Chart(pd.DataFrame({"번호": range(1, len(data) + 1), "강도": data})).mark_bar().encode(
                     x='번호:O',
                     y='강도:Q',
                     color=alt.condition(alt.datum.강도 >= st_fck, alt.value('#4D96FF'), alt.value('#FF6B6B'))
                 )
-                rule = alt.Chart(pd.DataFrame({'y':[st_fck]})).mark_rule(color='red', strokeDash=[5,3], size=2).encode(y='y')
+                rule = alt.Chart(pd.DataFrame({'y': [st_fck]})).mark_rule(color='red', strokeDash=[5, 3], size=2).encode(y='y')
 
-                st.altair_chart(chart + rule, width="stretch")
+                st.altair_chart(chart + rule, use_container_width=True)
             else:
                 st.warning("통계 분석을 위해서는 유효한 숫자 데이터가 최소 2개 필요합니다.")
 
