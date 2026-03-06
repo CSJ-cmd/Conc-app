@@ -123,10 +123,15 @@ def load_ocr_model():
 
 def _normalize_ocr_token(text):
     """OCR 오인식 문자를 숫자 파싱 친화적으로 정규화"""
+    text = str(text)
+
+    # 천단위 콤마(예: 1,234)는 제거
+    text = re.sub(r'(?<=\d),(?=\d{3}(?:\D|$))', '', text)
+
     replacements = {
         'O': '0', 'o': '0',
         'I': '1', 'l': '1', '|': '1',
-        ',': '.', ';': ':',
+        ',': '.', ';': '.',   # 기존 ';' -> ':' 오타성 치환 수정
     }
     for src, dst in replacements.items():
         text = text.replace(src, dst)
@@ -261,6 +266,14 @@ def parse_readings_text(raw_text):
             continue
     return vals
 
+
+def _safe_num(v, default, cast=float):
+    n = pd.to_numeric(v, errors="coerce")
+    if pd.isna(n):
+        return cast(default)
+    return cast(n)
+
+
 def extract_numbers_from_image(image_input, ocr_mode="정밀"):
     """
     OCR 전처리 강화 + 전표형 측정지에서 20개 측정값 자동 추출
@@ -269,18 +282,31 @@ def extract_numbers_from_image(image_input, ocr_mode="정밀"):
         import cv2
 
         if isinstance(image_input, Image.Image):
-            image = image_input
+            image = image_input.copy()
         else:
             image = Image.open(image_input)
+
+        # cv2 처리 안정화를 위해 모드 정규화
+        if image.mode not in ("RGB", "RGBA", "L"):
+            image = image.convert("RGB")
 
         max_width = 800
         if image.width > max_width:
             ratio = max_width / float(image.width)
             new_height = int((float(image.height) * float(ratio)))
-            image = image.resize((max_width, new_height), Image.Resampling.LANCZOS)
+            resample = Image.Resampling.LANCZOS if hasattr(Image, "Resampling") else Image.LANCZOS
+            image = image.resize((max_width, new_height), resample)
 
         image_np = np.array(image)
-        gray = cv2.cvtColor(image_np, cv2.COLOR_RGB2GRAY)
+
+        # 이미지 채널 수에 맞게 안전 변환
+        if image_np.ndim == 2:
+            gray = image_np
+        elif image_np.shape[2] == 4:
+            gray = cv2.cvtColor(image_np, cv2.COLOR_RGBA2GRAY)
+        else:
+            gray = cv2.cvtColor(image_np, cv2.COLOR_RGB2GRAY)
+
         blur = cv2.medianBlur(gray, 3)
 
         # 다양한 조건 대응을 위한 전처리 후보군
@@ -370,6 +396,7 @@ def get_angle_correction(R_val, angle):
     else:               # 0° 수평(또는 그 외)
         return 0.0
 
+
 def get_age_coefficient(days):
     try:
         days = float(days)
@@ -432,9 +459,10 @@ def calculate_strength(
     valid = [r for r, m in zip(rd, valid_mask) if m]
     excluded = [r for r, m in zip(rd, valid_mask) if not m]
 
-    # 20점 기준에서 5개 이상 기각이면 무효
-    if len(excluded) >= 5:
-        return False, f"시험 무효: 기각 {len(excluded)}개(20% 이상) → 재시험 권장"
+    # 기각 비율 20% 초과 시 무효
+    discard_ratio = (len(excluded) / n) if n else 1.0
+    if discard_ratio > 0.20:
+        return False, f"시험 무효: 기각 {len(excluded)}개({discard_ratio*100:.1f}%) → 재시험 권장"
 
     if len(valid) == 0:
         return False, "유효 데이터 없음 (±20% 범위 내 값이 없습니다)"
@@ -502,14 +530,28 @@ def calculate_strength(
         "Mean_Strength": s_mean
     }
 
+
 def convert_df(df):
     return df.to_csv(index=False).encode('utf-8-sig')
 
+
 def to_excel(df):
     output = io.BytesIO()
-    with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
-        df.to_excel(writer, index=False, sheet_name='Result')
-    return output.getvalue()
+    last_err = None
+
+    for engine in ("xlsxwriter", "openpyxl"):
+        try:
+            output.seek(0)
+            output.truncate(0)
+            with pd.ExcelWriter(output, engine=engine) as writer:
+                df.to_excel(writer, index=False, sheet_name='Result')
+            return output.getvalue()
+        except ImportError as e:
+            last_err = e
+            continue
+
+    raise RuntimeError("엑셀 저장 엔진(xlsxwriter/openpyxl)이 설치되어 있지 않습니다.") from last_err
+
 
 # =========================================================
 # 2-1) 검증용 테스트 케이스 (엑셀 값과 동일한 케이스 포함)
@@ -647,7 +689,7 @@ with tab1:
         """)
 
     with st.expander("🧪 검증용 테스트 케이스 실행(개발/검증)", expanded=False):
-        st.caption("TC1은 첨부 엑셀과 동일한 입력(20점)으로 계산했을 때 Ravg, ΔR, Ro, 강도식 값이 치하는지 확인합니다.")
+        st.caption("TC1은 첨부 엑셀과 동일한 입력(20점)으로 계산했을 때 Ravg, ΔR, Ro, 강도식 값이 일치하는지 확인합니다.")
         if st.button("테스트 실행", type="primary"):
             test_results = run_validation_tests()
             for name, passed, detail in test_results:
@@ -698,6 +740,16 @@ with tab2:
                 rot_val = st.radio("이미지 회전(반시계)", [0, 90, 180, 270], index=0, horizontal=True, key="img_rot")
 
             if img_file is not None:
+                # 새 업로드/회전/모드 변경 시 이전 OCR 결과 제거 (stale 방지)
+                try:
+                    upload_sig = (getattr(img_file, "name", ""), getattr(img_file, "size", 0), rot_val, ocr_mode, cam_mode)
+                except Exception:
+                    upload_sig = (str(img_file), rot_val, ocr_mode, cam_mode)
+
+                if st.session_state.get("ocr_upload_sig") != upload_sig:
+                    st.session_state["ocr_upload_sig"] = upload_sig
+                    st.session_state.pop("ocr_result", None)
+
                 with st.spinner("이미지 처리 및 숫자 인식 중..."):
                     pil_image = Image.open(img_file)
                     if rot_val != 0:
@@ -712,6 +764,7 @@ with tab2:
                         if len(ocr_vals) != 20:
                             st.warning("자동 인식값이 20개가 아닙니다. 아래 입력창에서 확인/수정 후 계산하세요.")
                     else:
+                        st.session_state.pop("ocr_result", None)
                         st.warning("숫자를 인식하지 못했습니다. 직접 입력해주세요.")
 
             # ---- 입력 파라미터: 모바일은 단일 컬럼, 데스크톱은 4열 ----
@@ -750,13 +803,14 @@ with tab2:
 
             txt = st.text_area("측정값 (자동 인식 결과 수정 가능)", value=default_txt, height=120 if mobile_client else 80)
 
-            # OCR 결과를 20칸 편집 UI로 제공
-            preview_vals = parse_readings_text(default_txt)
+            # OCR 결과를 20칸 편집 UI로 제공 (txt 기준으로 동기화)
+            preview_vals = parse_readings_text(txt)
             base_vals = (preview_vals + [np.nan] * 20)[:20]
             grid_df = pd.DataFrame({
                 "No": list(range(1, 21)),
                 "측정값": base_vals
             })
+            grid_key = f"ocr_20_grid_{abs(hash(txt)) % (10**8)}"
             edited_grid = st.data_editor(
                 grid_df,
                 column_config={
@@ -765,7 +819,7 @@ with tab2:
                 },
                 hide_index=True,
                 width="stretch",
-                key="ocr_20_grid"
+                key=grid_key
             )
 
             valid_grid_vals = [float(v) for v in edited_grid["측정값"].tolist() if not pd.isna(v)]
@@ -831,12 +885,16 @@ with tab2:
             ]
         })
 
-        st.download_button(
-            label="📥 입력 양식(엑셀) 다운로드",
-            data=to_excel(template_df),
-            file_name='반발경도_입력양식_Ct포함.xlsx',
-            mime='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
-        )
+        try:
+            template_excel = to_excel(template_df)
+            st.download_button(
+                label="📥 입력 양식(엑셀) 다운로드",
+                data=template_excel,
+                file_name='반발경도_입력양식_Ct포함.xlsx',
+                mime='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+            )
+        except RuntimeError as e:
+            st.error(str(e))
 
         uploaded_file = st.file_uploader("작성된 파일 업로드", type=["csv", "xlsx"])
         init_data = []
@@ -847,16 +905,19 @@ with tab2:
                 else:
                     df_up = pd.read_excel(uploaded_file)
 
-                for _, row in df_up.iterrows():
-                    init_data.append({
-                        "선택": True,
-                        "지점": row.get("지점", "P"),
-                        "각도": int(row.get("각도", 0)) if not pd.isna(row.get("각도", 0)) else 0,
-                        "재령": int(row.get("재령", 3000)) if not pd.isna(row.get("재령", 3000)) else 3000,
-                        "설계": float(row.get("설계", 24.0)) if not pd.isna(row.get("설계", 24.0)) else 24.0,
-                        "Ct": float(row.get("Ct", 1.0)) if not pd.isna(row.get("Ct", 1.0)) else 1.0,
-                        "데이터": str(row.get("데이터", ""))
-                    })
+                for idx, row in df_up.iterrows():
+                    try:
+                        init_data.append({
+                            "선택": True,
+                            "지점": row.get("지점", f"P{idx+1}"),
+                            "각도": _safe_num(row.get("각도", 0), 0, int),
+                            "재령": _safe_num(row.get("재령", 3000), 3000, int),
+                            "설계": _safe_num(row.get("설계", 24.0), 24.0, float),
+                            "Ct": _safe_num(row.get("Ct", 1.0), 1.0, float),
+                            "데이터": str(row.get("데이터", "")),
+                        })
+                    except Exception as row_err:
+                        logger.warning("업로드 %s행 파싱 실패: %s", idx + 1, row_err)
             except ImportError:
                 st.error("엑셀 파일을 읽으려면 'openpyxl' 라이브러리가 필요합니다.")
             except Exception as e:
@@ -952,14 +1013,17 @@ with tab2:
 
                 st.divider()
                 st.subheader("💾 결과 저장")
-                excel_data = to_excel(final_df)
-                st.download_button(
-                    label="📊 전체 결과 엑셀 다운로드",
-                    data=excel_data,
-                    file_name=f"{p_name}_반발경도_평가결과_Ct포함.xlsx",
-                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                    type="primary"
-                )
+                try:
+                    excel_data = to_excel(final_df)
+                    st.download_button(
+                        label="📊 전체 결과 엑셀 다운로드",
+                        data=excel_data,
+                        file_name=f"{p_name}_반발경도_평가결과_Ct포함.xlsx",
+                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                        type="primary"
+                    )
+                except RuntimeError as e:
+                    st.error(str(e))
 
 # ---------------------------------------------------------
 # [Tab 3] 탄산화 평가 (기존 유지)
@@ -1032,22 +1096,25 @@ with tab4:
         )
 
         if st.button("통계 분석 실행", type="primary", width="stretch"):
-            data = sorted(label_df["추정강도"].tolist())
+            strength_series = pd.to_numeric(label_df["추정강도"], errors="coerce").dropna()
+            data = sorted(strength_series.astype(float).tolist())
 
-            current_formulas = set(label_df["적용공식"].unique())
+            current_formulas = set(label_df["적용공식"].dropna().astype(str).unique())
             recommended = set(["일본건축", "일본재료", "전체평균(추천)"] if st_fck < 40 else ["과기부", "권영웅", "KALIS", "전체평균(추천)"])
 
             if not current_formulas.issubset(recommended):
                 st.warning(f"⚠️ 주의: 현재 설계강도({st_fck}MPa) 기준, 일부 선택된 공식은 적합하지 않을 수 있습니다.")
 
             if len(data) >= 2:
-                avg_v, std_v = np.mean(data), np.std(data, ddof=1)
+                avg_v = float(np.mean(data))
+                std_v = float(np.std(data, ddof=1))
+                cv_v = (std_v / avg_v * 100.0) if avg_v != 0 else np.nan
 
                 with st.container(border=True):
                     m1, m2, m3 = st.columns(3)
                     m1.metric("평균", f"{avg_v:.2f} MPa", delta=f"{(avg_v/st_fck*100):.1f}%")
                     m2.metric("표준편차 (σ)", f"{std_v:.2f} MPa")
-                    m3.metric("변동계수 (CV)", f"{(std_v/avg_v*100):.1f}%")
+                    m3.metric("변동계수 (CV)", f"{cv_v:.1f}%" if np.isfinite(cv_v) else "N/A")
 
                 chart = alt.Chart(pd.DataFrame({"번호": range(1, len(data)+1), "강도": data})).mark_bar().encode(
                     x='번호:O',
@@ -1058,5 +1125,5 @@ with tab4:
 
                 st.altair_chart(chart + rule, width="stretch")
             else:
-                st.warning("통계 분석을 위해서는 최소 2개 이상의 데이터가 필요합니다.")
+                st.warning("통계 분석을 위해서는 유효한 숫자 데이터가 최소 2개 필요합니다.")
 
