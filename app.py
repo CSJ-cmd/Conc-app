@@ -101,6 +101,10 @@ st.markdown("""
 if 'rebound_data' not in st.session_state:
     st.session_state['rebound_data'] = []
 
+# 통계·비교 탭에서 사용할 공식별 강도 누적 (지점별 5개 공식 값)
+if 'rebound_records' not in st.session_state:
+    st.session_state['rebound_records'] = []  # list of dict: {"지점","일본재료","일본건축","과기부","권영웅","KALIS","평균"}
+
 
 def is_mobile_client():
     """간단한 UA 기반 모바일/태블릿 판별"""
@@ -462,10 +466,10 @@ def calculate_strength(
     valid = [r for r, m in zip(rd, valid_mask) if m]
     excluded = [r for r, m in zip(rd, valid_mask) if not m]
 
-    # 기각 비율 20% 초과 시 무효
+    # 기각 5개 이상 시 무효 (지침: 20점 중 5개 이상 ±20% 벗어나면 재시험)
     discard_ratio = (len(excluded) / n) if n else 1.0
-    if discard_ratio > 0.20:
-        return False, f"시험 무효: 기각 {len(excluded)}개({discard_ratio*100:.1f}%) → 재시험 권장"
+    if len(excluded) >= 5:
+        return False, f"시험 무효: 기각 {len(excluded)}개({discard_ratio*100:.1f}%) → 재시험 권장 (지침상 5개 이상 기각 시 무효)"
 
     if len(valid) == 0:
         return False, "유효 데이터 없음 (±20% 범위 내 값이 없습니다)"
@@ -535,6 +539,138 @@ def calculate_strength(
 
 def convert_df(df):
     return df.to_csv(index=False).encode('utf-8-sig')
+
+
+# ---------------------------------------------------------
+# PDF 보고서 생성 (한글 폰트 자동 탐색)
+# ---------------------------------------------------------
+def _find_korean_font():
+    """시스템에 설치된 한글 폰트 경로 자동 탐색"""
+    import os
+    candidates = [
+        "/usr/share/fonts/truetype/nanum/NanumGothic.ttf",
+        "/usr/share/fonts/truetype/nanum/NanumBarunGothic.ttf",
+        "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
+        "/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc",
+        "/Library/Fonts/AppleGothic.ttf",
+        "/System/Library/Fonts/AppleSDGothicNeo.ttc",
+        "C:/Windows/Fonts/malgun.ttf",
+        "C:/Windows/Fonts/NanumGothic.ttf",
+    ]
+    for path in candidates:
+        if os.path.exists(path):
+            return path
+    return None
+
+
+def generate_pdf_report(project_name, report_type, summary_dict, detail_df=None, notes=None):
+    """
+    정밀안전점검 보고서 부록용 PDF 생성
+    - report_type: '반발경도' / '탄산화' / '통계'
+    - summary_dict: 표 상단 요약 정보 (dict)
+    - detail_df: 상세 데이터 (DataFrame, 선택)
+    - notes: 추가 비고 (str, 선택)
+    """
+    try:
+        from reportlab.lib.pagesizes import A4
+        from reportlab.lib import colors
+        from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+        from reportlab.lib.units import mm
+        from reportlab.pdfbase import pdfmetrics
+        from reportlab.pdfbase.ttfonts import TTFont
+        from reportlab.platypus import (SimpleDocTemplate, Paragraph, Spacer,
+                                          Table, TableStyle, PageBreak)
+    except ImportError:
+        raise RuntimeError("PDF 생성을 위해 'reportlab' 라이브러리가 필요합니다. (pip install reportlab)")
+
+    from datetime import datetime
+
+    font_path = _find_korean_font()
+    font_name = "Helvetica"
+    if font_path:
+        try:
+            pdfmetrics.registerFont(TTFont("KFont", font_path))
+            font_name = "KFont"
+        except Exception:
+            font_name = "Helvetica"
+
+    buffer = io.BytesIO()
+    doc = SimpleDocTemplate(buffer, pagesize=A4,
+                             leftMargin=18*mm, rightMargin=18*mm,
+                             topMargin=20*mm, bottomMargin=18*mm)
+
+    styles = getSampleStyleSheet()
+    title_style = ParagraphStyle('K_Title', parent=styles['Title'],
+                                  fontName=font_name, fontSize=16, leading=22,
+                                  alignment=1)
+    h2 = ParagraphStyle('K_H2', parent=styles['Heading2'],
+                         fontName=font_name, fontSize=12, leading=16,
+                         spaceBefore=8, spaceAfter=4)
+    body = ParagraphStyle('K_Body', parent=styles['Normal'],
+                           fontName=font_name, fontSize=9, leading=13)
+
+    story = []
+    story.append(Paragraph(f"{project_name}", title_style))
+    story.append(Paragraph(f"비파괴검사 결과 보고서 ({report_type})", h2))
+    story.append(Paragraph(f"작성일: {datetime.now().strftime('%Y-%m-%d %H:%M')}", body))
+    story.append(Spacer(1, 6*mm))
+
+    # 요약 표
+    story.append(Paragraph("■ 평가 요약", h2))
+    summary_rows = [["항목", "값"]]
+    for k, v in summary_dict.items():
+        summary_rows.append([str(k), str(v)])
+    t = Table(summary_rows, colWidths=[60*mm, 110*mm])
+    t.setStyle(TableStyle([
+        ('FONTNAME', (0, 0), (-1, -1), font_name),
+        ('FONTSIZE', (0, 0), (-1, -1), 9),
+        ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor("#1f77b4")),
+        ('TEXTCOLOR', (0, 0), (-1, 0), colors.white),
+        ('GRID', (0, 0), (-1, -1), 0.4, colors.grey),
+        ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+        ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, colors.HexColor("#f5f7fa")]),
+    ]))
+    story.append(t)
+    story.append(Spacer(1, 6*mm))
+
+    # 상세 데이터
+    if detail_df is not None and not detail_df.empty:
+        story.append(Paragraph("■ 상세 데이터", h2))
+        # 컬럼이 너무 많으면 자르고 안내
+        max_cols = 8
+        df_show = detail_df.iloc[:, :max_cols].copy()
+        if len(detail_df.columns) > max_cols:
+            story.append(Paragraph(
+                f"※ 컬럼이 많아 상위 {max_cols}개만 표시. 전체는 엑셀 파일 참조.", body))
+        rows = [list(df_show.columns)]
+        for _, r in df_show.iterrows():
+            rows.append([("" if pd.isna(x) else str(x)) for x in r.tolist()])
+        col_w = (170*mm) / max(1, len(df_show.columns))
+        td = Table(rows, colWidths=[col_w]*len(df_show.columns), repeatRows=1)
+        td.setStyle(TableStyle([
+            ('FONTNAME', (0, 0), (-1, -1), font_name),
+            ('FONTSIZE', (0, 0), (-1, -1), 7.5),
+            ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor("#4D96FF")),
+            ('TEXTCOLOR', (0, 0), (-1, 0), colors.white),
+            ('GRID', (0, 0), (-1, -1), 0.3, colors.grey),
+            ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
+            ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+        ]))
+        story.append(td)
+        story.append(Spacer(1, 4*mm))
+
+    if notes:
+        story.append(Paragraph("■ 비고", h2))
+        story.append(Paragraph(str(notes).replace("\n", "<br/>"), body))
+
+    story.append(Spacer(1, 8*mm))
+    story.append(Paragraph(
+        "※ 본 보고서는 「시설물의 안전 및 유지관리에 관한 특별법」 세부지침에 따른 "
+        "비파괴검사 결과를 자동 산정한 것으로, 최종 판정은 책임기술자의 검토를 거쳐야 합니다.",
+        body))
+
+    doc.build(story)
+    return buffer.getvalue()
 
 
 def to_excel(df):
@@ -610,7 +746,7 @@ def run_validation_tests():
     tc2_pass = ok2 and (res2["Discard"] == 2)
     results.append(("TC2(기각 2개, 무효X)", tc2_pass, res2 if ok2 else res2))
 
-    # ----- TC3: outlier 5개 -> 무효 -----
+    # ----- TC3: outlier 5개 -> 무효 (지침상 5개 이상 기각 시 무효) -----
     base3 = [50] * 15 + [10, 90, 10, 90, 10]
     ok3, res3 = calculate_strength(base3, angle=0, days=3000, design_fck=24, core_coeff=1.0, require_20_points=True)
     tc3_pass = (not ok3) and ("시험 무효" in str(res3))
@@ -656,7 +792,11 @@ with tab1:
     * 최종 강도 = Ct × 비파괴(반발경도) 강도
 
     **5. 통계ㆍ비교 탭 활용 안내**
-    * 추정된 압축강도의 표준편차와 변동계수 등을 계산하여 해당 시설물에 가장 적합한 산정식을 확인하고 검토하기 위함입니다.
+    * 반발경도 단일평가 후 [통계 분석 목록에 추가] 버튼을 누르면 5개 공식별 결과가 모두 누적됩니다.
+    * 누적된 지점들 간 변동계수(CV)가 가장 낮은 공식을 자동 추천합니다 — 해당 시설물에 가장 안정적인 산정식입니다.
+
+    **6. PDF 보고서 출력**
+    * 각 평가(반발경도/탄산화/통계) 결과 하단의 [PDF 다운로드] 버튼으로 정밀안전점검 보고서 부록용 PDF를 받을 수 있습니다.
     """)
 
     st.divider()
@@ -670,7 +810,7 @@ with tab1:
         #### **✅ 측정 및 기각 룰**
         1. **타격 점수**: 1개소당 **20점 이상** 측정을 원칙으로 합니다.
         2. **이상치 기각**: 전체 측정값의 산술평균을 낸 후, 평균값에서 **±20%를 벗어나는 데이터는 무효**
-        3. **시험 무효**: 기각된 데이터가 **5개 이상(20% 초과)**인 경우 재시험 권장
+        3. **시험 무효**: 기각된 데이터가 **5개 이상**인 경우 재시험 권장
         """)
         m_df = pd.DataFrame({
             "구분": ["상향 수직 (+90°)", "상향 경사 (+45°)", "수평 타격 (0°)", "하향 경사 (-45°)", "하향 수직 (-90°)"],
@@ -777,7 +917,8 @@ with tab2:
                     [90, 45, 0, -45, -90],
                     format_func=lambda x: {90: "+90°(상향수직)", 45: "+45°(상향경사)", 0: "0°(수평)", -45: "-45°(하향경사)", -90: "-90°(하향수직)"}[x]
                 )
-                days = st.number_input("재령(일)", 10, 10000, 3000)
+                days = st.number_input("재령(일)", 10, 10000, 3000,
+                                      help="공용연수(년) × 365 + 양생기간. 미입력 시 3000일(약 8년) 적용")
                 fck = st.number_input("설계강도(MPa)", 15.0, 100.0, 24.0)
                 ct = st.number_input("코어 보정계수 Ct", 0.10, 2.00, 1.00, step=0.01)
             else:
@@ -789,7 +930,8 @@ with tab2:
                         format_func=lambda x: {90: "+90°(상향수직)", 45: "+45°(상향경사)", 0: "0°(수평)", -45: "-45°(하향경사)", -90: "-90°(하향수직)"}[x]
                     )
                 with c2:
-                    days = st.number_input("재령(일)", 10, 10000, 3000)
+                    days = st.number_input("재령(일)", 10, 10000, 3000,
+                                          help="공용연수(년) × 365 + 양생기간. 미입력 시 3000일(약 8년) 적용")
                 with c3:
                     fck = st.number_input("설계강도(MPa)", 15.0, 100.0, 24.0)
                 with c4:
@@ -853,9 +995,18 @@ with tab2:
                     r6.metric("Ct", f"{res['Core_Coeff']:.2f}")
 
                 # 데이터 연동 버튼
-                if st.button("➕ 통계 분석 목록에 추가", key="add_to_stats"):
-                    st.session_state['rebound_data'].append(res['Mean_Strength'])
-                    st.success(f"통계 탭 목록에 {res['Mean_Strength']:.2f} MPa 추가 완료!")
+                add_col1, add_col2 = st.columns(2)
+                with add_col1:
+                    point_name = st.text_input("지점명", value=f"P{len(st.session_state['rebound_records'])+1}",
+                                               key="add_point_name")
+                with add_col2:
+                    if st.button("➕ 통계 분석 목록에 추가", key="add_to_stats", use_container_width=True):
+                        st.session_state['rebound_data'].append(res['Mean_Strength'])
+                        rec = {"지점": point_name, "평균": round(res['Mean_Strength'], 2)}
+                        for k, v in res["Formulas"].items():
+                            rec[k] = round(v, 2)
+                        st.session_state['rebound_records'].append(rec)
+                        st.success(f"{point_name} 추가 완료 (평균 {res['Mean_Strength']:.2f} MPa, 5개 공식값 포함)")
 
                 df_f = pd.DataFrame({"공식": list(res["Formulas"].keys()), "강도": list(res["Formulas"].values())})
                 chart = alt.Chart(df_f).mark_bar().encode(
@@ -866,6 +1017,46 @@ with tab2:
 
                 rule_chart = alt.Chart(pd.DataFrame({'y': [fck]})).mark_rule(color='red', strokeDash=[5, 3], size=2).encode(y='y')
                 st.altair_chart(chart + rule_chart, use_container_width=True)
+
+                # ----- PDF 보고서 다운로드 -----
+                with st.expander("📄 PDF 보고서 다운로드 (정밀안전점검 부록용)", expanded=False):
+                    summary = {
+                        "프로젝트명": p_name,
+                        "타격 방향": f"{angle}°",
+                        "재령(일)": int(days),
+                        "설계강도(MPa)": f"{fck:.1f}",
+                        "측정점수 / 기각수": f"{res['N']} / {res['Discard']}",
+                        "유효 평균 R": f"{res['R_avg']:.3f}",
+                        "타격방향 보정 ΔR": f"{res['Angle_Corr']:+.4f}",
+                        "보정 R₀": f"{res['R0']:.4f}",
+                        "재령계수 α": f"{res['Age_Coeff']:.3f}",
+                        "코어 보정계수 Ct": f"{res['Core_Coeff']:.2f}",
+                        "평균 추정 압축강도": f"{res['Mean_Strength']:.2f} MPa",
+                        "강도비(설계 대비)": f"{(res['Mean_Strength']/fck*100):.1f} %" if fck else "-",
+                    }
+                    detail_pdf = pd.DataFrame({
+                        "공식": list(res["Formulas"].keys()),
+                        "강도(MPa)": [f"{v:.2f}" for v in res["Formulas"].values()],
+                        "강도비(%)": [f"{(v/fck*100):.1f}" if fck else "-" for v in res["Formulas"].values()],
+                    })
+                    try:
+                        pdf_bytes = generate_pdf_report(
+                            project_name=p_name,
+                            report_type="반발경도",
+                            summary_dict=summary,
+                            detail_df=detail_pdf,
+                            notes=f"적용 공식: {', '.join(selected_methods) if selected_methods else '자동추천'}\n"
+                                  f"기각 데이터: {res['Excluded']}"
+                        )
+                        st.download_button(
+                            "📥 PDF 다운로드",
+                            data=pdf_bytes,
+                            file_name=f"{p_name}_반발경도_보고서.pdf",
+                            mime="application/pdf",
+                            use_container_width=True
+                        )
+                    except RuntimeError as e:
+                        st.warning(str(e))
             else:
                 st.error(res)
 
@@ -1016,118 +1207,443 @@ with tab2:
 
                 st.divider()
                 st.subheader("💾 결과 저장")
-                try:
-                    excel_data = to_excel(final_df)
-                    st.download_button(
-                        label="📊 전체 결과 엑셀 다운로드",
-                        data=excel_data,
-                        file_name=f"{p_name}_반발경도_평가결과_Ct포함.xlsx",
-                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                        type="primary"
-                    )
-                except RuntimeError as e:
-                    st.error(str(e))
+                col_dl1, col_dl2 = st.columns(2)
+                with col_dl1:
+                    try:
+                        excel_data = to_excel(final_df)
+                        st.download_button(
+                            label="📊 엑셀 다운로드",
+                            data=excel_data,
+                            file_name=f"{p_name}_반발경도_평가결과_Ct포함.xlsx",
+                            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                            type="primary",
+                            use_container_width=True
+                        )
+                    except RuntimeError as e:
+                        st.error(str(e))
+                with col_dl2:
+                    try:
+                        valid_rows = final_df.dropna(subset=["추정강도"]) if "추정강도" in final_df.columns else final_df
+                        if not valid_rows.empty and "추정강도" in valid_rows.columns:
+                            mean_s = float(valid_rows["추정강도"].mean())
+                            summary_b = {
+                                "프로젝트명": p_name,
+                                "평가 지점 수": len(final_df),
+                                "유효 지점 수": len(valid_rows),
+                                "전체 평균 추정강도": f"{mean_s:.2f} MPa",
+                            }
+                        else:
+                            summary_b = {"프로젝트명": p_name, "평가 지점 수": len(final_df)}
+                        pdf_bytes = generate_pdf_report(
+                            project_name=p_name,
+                            report_type="반발경도(다중지점)",
+                            summary_dict=summary_b,
+                            detail_df=final_df,
+                            notes="다중 지점 일괄 평가 결과"
+                        )
+                        st.download_button(
+                            label="📄 PDF 다운로드",
+                            data=pdf_bytes,
+                            file_name=f"{p_name}_반발경도_보고서.pdf",
+                            mime="application/pdf",
+                            use_container_width=True
+                        )
+                    except RuntimeError as e:
+                        st.warning(str(e))
 
 # ---------------------------------------------------------
 # [Tab 3] 탄산화 평가
 # ---------------------------------------------------------
 with tab3:
     st.subheader("🧪 탄산화 깊이 및 상세 분석")
-    with st.container(border=True):
-        c1, c2, c3 = st.columns(3)
-        with c1:
-            m_depth = st.number_input("측정 깊이(mm)", 0.0, 100.0, 12.0)
-        with c2:
-            d_cover = st.number_input("설계 피복(mm)", 10.0, 200.0, 40.0)
-        with c3:
-            a_years = st.number_input("경과 년수(년)", 1, 100, 20)
 
-    if st.button("평가 실행", type="primary", key="btn_carb_run", use_container_width=True):
+    carb_mode = st.radio("입력 방식", ["단일 지점", "다중 지점 (엑셀 업로드)"],
+                         horizontal=True, key="carb_mode")
+
+    def _carb_grade(rem):
+        if rem >= 30:
+            return "A", "green"
+        elif rem >= 10:
+            return "B", "blue"
+        elif rem >= 0:
+            return "C", "orange"
+        else:
+            return "D", "red"
+
+    def _carb_evaluate(m_depth, d_cover, a_years):
         rate_a = m_depth / math.sqrt(a_years) if a_years > 0 else 0
         rem = d_cover - m_depth
-        total_life = (d_cover / rate_a) ** 2 if rate_a > 0 else 99.9
-        res_life = total_life - a_years
+        if rate_a > 0:
+            total_life = (d_cover / rate_a) ** 2
+            res_life = total_life - a_years
+        else:
+            # 미탄산화 (m_depth=0) → 잔여수명 무한대로 간주
+            total_life = float('inf')
+            res_life = float('inf')
+        grade, color = _carb_grade(rem)
+        return rate_a, rem, total_life, res_life, grade, color
 
-        grade, color = ("A", "green") if rem >= 30 else (("B", "blue") if rem >= 10 else (("C", "orange") if rem >= 0 else ("D", "red")))
-
-        st.markdown(f"### 결과: :{color}[{grade} 등급]")
+    if carb_mode == "단일 지점":
         with st.container(border=True):
-            cc1, cc2, cc3 = st.columns(3)
-            cc1.metric("잔여 피복량", f"{rem:.1f} mm")
-            cc2.metric("속도 계수 (A)", f"{rate_a:.3f}")
-            cc3.metric("예측 잔여수명", f"{max(0, res_life):.1f} 년")
-            st.info(f"**계산 근거:** $A = {m_depth} / \\sqrt{{{a_years}}} = {rate_a:.3f}$, 잔여수명 $T = ({d_cover}/{rate_a:.3f})^2 - {a_years} = {res_life:.1f}$년")
+            c1, c2, c3 = st.columns(3)
+            with c1:
+                m_depth = st.number_input("측정 깊이(mm)", 0.0, 100.0, 12.0)
+            with c2:
+                d_cover = st.number_input("설계 피복(mm)", 10.0, 200.0, 40.0)
+            with c3:
+                a_years = st.number_input("경과 년수(년)", 1, 100, 20,
+                                           help="시설물 준공 후 경과한 햇수")
 
-        y_steps = np.linspace(0, 100, 101)
-        d_steps = rate_a * np.sqrt(y_steps)
-        df_p = pd.DataFrame({'경과년수': y_steps, '탄산화깊이': d_steps})
-        line = alt.Chart(df_p).mark_line(color='#1f77b4').encode(
-            x=alt.X('경과년수', title='경과년수 (년)'),
-            y=alt.Y('탄산화깊이', title='탄산화 깊이 (mm)')
+        if st.button("평가 실행", type="primary", key="btn_carb_run", use_container_width=True):
+            rate_a, rem, total_life, res_life, grade, color = _carb_evaluate(m_depth, d_cover, a_years)
+
+            if m_depth == 0:
+                st.success("✅ 탄산화 미검출 (측정 깊이 0mm)")
+                grade, color = "A", "green"
+
+            st.markdown(f"### 결과: :{color}[{grade} 등급]")
+            with st.container(border=True):
+                cc1, cc2, cc3 = st.columns(3)
+                cc1.metric("잔여 피복량", f"{rem:.1f} mm")
+                cc2.metric("속도 계수 (A)", f"{rate_a:.3f}" if rate_a > 0 else "N/A")
+                cc3.metric("예측 잔여수명",
+                          f"{max(0, res_life):.1f} 년" if res_life != float('inf') else "∞")
+                if rate_a > 0:
+                    st.info(f"**계산 근거:** $A = {m_depth} / \\sqrt{{{a_years}}} = {rate_a:.3f}$, "
+                            f"잔여수명 $T = ({d_cover}/{rate_a:.3f})^2 - {a_years} = {res_life:.1f}$년")
+
+            if rate_a > 0:
+                y_steps = np.linspace(0, 100, 101)
+                d_steps = rate_a * np.sqrt(y_steps)
+                df_p = pd.DataFrame({'경과년수': y_steps, '탄산화깊이': d_steps})
+                line = alt.Chart(df_p).mark_line(color='#1f77b4').encode(
+                    x=alt.X('경과년수', title='경과년수 (년)'),
+                    y=alt.Y('탄산화깊이', title='탄산화 깊이 (mm)')
+                )
+                rule = alt.Chart(pd.DataFrame({'y': [d_cover]})).mark_rule(
+                    color='red', strokeDash=[5, 5], size=2).encode(y='y')
+                point = alt.Chart(pd.DataFrame({'x': [a_years], 'y': [m_depth]})).mark_point(
+                    color='orange', size=100, filled=True).encode(x='x', y='y')
+                st.altair_chart(line + rule + point, use_container_width=True)
+
+            # 탄산화 PDF
+            with st.expander("📄 PDF 보고서 다운로드", expanded=False):
+                summary = {
+                    "프로젝트명": p_name,
+                    "측정 깊이(mm)": f"{m_depth:.1f}",
+                    "설계 피복(mm)": f"{d_cover:.1f}",
+                    "경과 년수(년)": int(a_years),
+                    "잔여 피복량(mm)": f"{rem:.1f}",
+                    "속도 계수 A": f"{rate_a:.3f}" if rate_a > 0 else "N/A",
+                    "예측 잔여수명(년)": f"{max(0, res_life):.1f}" if res_life != float('inf') else "∞",
+                    "판정 등급": grade,
+                }
+                try:
+                    pdf_bytes = generate_pdf_report(
+                        project_name=p_name, report_type="탄산화",
+                        summary_dict=summary,
+                        notes="탄산화 등급 기준: A(잔여피복 ≥30mm) / B(10~30mm) / C(0~10mm) / D(< 0mm)"
+                    )
+                    st.download_button("📥 PDF 다운로드", data=pdf_bytes,
+                                        file_name=f"{p_name}_탄산화_보고서.pdf",
+                                        mime="application/pdf", use_container_width=True)
+                except RuntimeError as e:
+                    st.warning(str(e))
+
+    else:
+        # ----- 탄산화 다중 지점 -----
+        st.info("💡 시설물 1건당 보통 10~20개소 측정합니다. 양식을 받아 채워 업로드하세요.")
+        carb_template = pd.DataFrame({
+            "지점": ["P1-슬래브", "P2-기둥", "P3-벽체"],
+            "측정깊이(mm)": [12.0, 8.5, 15.0],
+            "설계피복(mm)": [40.0, 40.0, 30.0],
+            "경과년수(년)": [20, 20, 20],
+        })
+        try:
+            tpl_excel = to_excel(carb_template)
+            st.download_button("📥 탄산화 입력 양식 다운로드", data=tpl_excel,
+                              file_name="탄산화_입력양식.xlsx",
+                              mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+        except RuntimeError as e:
+            st.error(str(e))
+
+        carb_file = st.file_uploader("작성된 탄산화 데이터 업로드", type=["csv", "xlsx"], key="carb_up")
+        carb_init = []
+        if carb_file:
+            try:
+                if carb_file.name.endswith(".csv"):
+                    df_c = pd.read_csv(carb_file)
+                else:
+                    df_c = pd.read_excel(carb_file)
+                for idx, row in df_c.iterrows():
+                    carb_init.append({
+                        "선택": True,
+                        "지점": row.get("지점", f"P{idx+1}"),
+                        "측정깊이(mm)": _safe_num(row.get("측정깊이(mm)", 0), 0, float),
+                        "설계피복(mm)": _safe_num(row.get("설계피복(mm)", 40), 40, float),
+                        "경과년수(년)": _safe_num(row.get("경과년수(년)", 20), 20, int),
+                    })
+            except Exception as e:
+                st.error(f"파일 파싱 실패: {e}")
+
+        df_c_batch = pd.DataFrame(carb_init) if carb_init else pd.DataFrame(
+            columns=["선택", "지점", "측정깊이(mm)", "설계피복(mm)", "경과년수(년)"])
+
+        edited_carb = st.data_editor(
+            df_c_batch,
+            column_config={
+                "선택": st.column_config.CheckboxColumn("선택", default=True),
+                "측정깊이(mm)": st.column_config.NumberColumn("측정깊이(mm)", min_value=0.0, max_value=200.0, step=0.1),
+                "설계피복(mm)": st.column_config.NumberColumn("설계피복(mm)", min_value=10.0, max_value=300.0, step=1.0),
+                "경과년수(년)": st.column_config.NumberColumn("경과년수(년)", min_value=1, max_value=200),
+            },
+            use_container_width=True, hide_index=True, num_rows="dynamic"
         )
-        rule = alt.Chart(pd.DataFrame({'y': [d_cover]})).mark_rule(color='red', strokeDash=[5, 5], size=2).encode(y='y')
-        point = alt.Chart(pd.DataFrame({'x': [a_years], 'y': [m_depth]})).mark_point(color='orange', size=100, filled=True).encode(x='x', y='y')
-        st.altair_chart(line + rule + point, use_container_width=True)
+
+        if st.button("🚀 일괄 평가 실행", type="primary", use_container_width=True, key="btn_carb_batch"):
+            res_rows = []
+            for _, row in edited_carb.iterrows():
+                if not row.get("선택", True):
+                    continue
+                try:
+                    md = float(row["측정깊이(mm)"])
+                    dc = float(row["설계피복(mm)"])
+                    ay = int(row["경과년수(년)"])
+                    rate_a, rem, _, res_life, grade, _ = _carb_evaluate(md, dc, ay)
+                    res_rows.append({
+                        "지점": row.get("지점", "P"),
+                        "측정깊이(mm)": md,
+                        "설계피복(mm)": dc,
+                        "경과년수(년)": ay,
+                        "잔여피복(mm)": round(rem, 1),
+                        "속도계수A": round(rate_a, 3) if rate_a > 0 else 0,
+                        "잔여수명(년)": "∞" if res_life == float('inf') else round(max(0, res_life), 1),
+                        "등급": grade,
+                    })
+                except Exception as e:
+                    res_rows.append({"지점": row.get("지점", "P"), "오류": str(e)})
+
+            if res_rows:
+                df_carb_res = pd.DataFrame(res_rows)
+                st.dataframe(df_carb_res, use_container_width=True, hide_index=True)
+
+                # 등급 분포
+                if "등급" in df_carb_res.columns:
+                    grade_counts = df_carb_res["등급"].value_counts().reset_index()
+                    grade_counts.columns = ["등급", "건수"]
+                    st.altair_chart(
+                        alt.Chart(grade_counts).mark_bar().encode(
+                            x=alt.X("등급:N", sort=["A", "B", "C", "D"]),
+                            y="건수:Q",
+                            color=alt.Color("등급:N", scale=alt.Scale(
+                                domain=["A", "B", "C", "D"],
+                                range=["#2ecc71", "#3498db", "#f39c12", "#e74c3c"]))
+                        ).properties(height=250, title="등급별 분포"),
+                        use_container_width=True
+                    )
+
+                # 다운로드
+                st.divider()
+                cdc1, cdc2 = st.columns(2)
+                with cdc1:
+                    try:
+                        st.download_button("📊 엑셀 다운로드",
+                                          data=to_excel(df_carb_res),
+                                          file_name=f"{p_name}_탄산화_평가결과.xlsx",
+                                          mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                                          type="primary", use_container_width=True)
+                    except RuntimeError as e:
+                        st.error(str(e))
+                with cdc2:
+                    try:
+                        d_grades = df_carb_res["등급"].value_counts().to_dict() if "등급" in df_carb_res.columns else {}
+                        summary_c = {
+                            "프로젝트명": p_name,
+                            "평가 지점 수": len(df_carb_res),
+                            **{f"{g}등급 건수": v for g, v in sorted(d_grades.items())}
+                        }
+                        pdf_bytes = generate_pdf_report(
+                            project_name=p_name, report_type="탄산화(다중지점)",
+                            summary_dict=summary_c, detail_df=df_carb_res,
+                            notes="등급 기준: A(잔여피복 ≥30mm) / B(10~30mm) / C(0~10mm) / D(<0mm)"
+                        )
+                        st.download_button("📄 PDF 다운로드", data=pdf_bytes,
+                                          file_name=f"{p_name}_탄산화_보고서.pdf",
+                                          mime="application/pdf", use_container_width=True)
+                    except RuntimeError as e:
+                        st.warning(str(e))
 
 # ---------------------------------------------------------
 # [Tab 4] 통계 및 비교 (세션 연동 적용)
 # ---------------------------------------------------------
 with tab4:
-    st.subheader("📊 강도 통계 및 비교 분석")
-    c1, c2 = st.columns([1, 2])
+    st.subheader("📊 강도 통계 및 공식 적합성 비교")
+
+    st.caption("반발경도 단일 평가 후 [통계 분석 목록에 추가] 버튼으로 누적된 지점별 5개 공식 결과를 비교하여, "
+               "변동계수(CV)가 가장 낮은 = 해당 시설물에 가장 안정적인 공식을 자동 추천합니다.")
+
+    c1, c2 = st.columns([1, 3])
     with c1:
         st_fck = st.number_input("기준 설계강도(MPa)", 15.0, 100.0, 24.0, key="stat_fck")
-
-    session_data_str = " ".join([f"{x:.1f}" for x in st.session_state['rebound_data']])
-    default_stat_txt = session_data_str if session_data_str else "24.5 26.2 23.1 21.8 25.5 27.0"
-
     with c2:
-        raw_txt = st.text_area("강도 데이터 목록 (반발경도 탭에서 추가된 데이터 포함)", default_stat_txt, height=68)
+        st.markdown("**누적된 평가 지점**")
+        st.caption(f"현재 {len(st.session_state['rebound_records'])}개 지점 / "
+                   f"수동 입력 데이터 {len(st.session_state['rebound_data'])}개")
 
-    parsed = parse_readings_text(raw_txt)
+    # ----- 1) 지점별 공식 비교 모드 (rebound_records 기반) -----
+    st.divider()
+    st.markdown("### 📌 지점별 공식 비교 (자동 추천)")
 
-    if parsed:
-        df_stat = pd.DataFrame({"순번": range(1, len(parsed) + 1), "추정강도": parsed, "적용공식": ["전체평균(추천)"] * len(parsed)})
-
-        label_df = st.data_editor(
-            df_stat,
+    if st.session_state['rebound_records']:
+        recs_df = pd.DataFrame(st.session_state['rebound_records'])
+        # 누적 데이터 편집 (지점 삭제 가능)
+        recs_df.insert(0, "유지", True)
+        edited_recs = st.data_editor(
+            recs_df,
             column_config={
-                "순번": st.column_config.NumberColumn("No.", disabled=True),
-                "적용공식": st.column_config.SelectboxColumn("공식 선택", options=["일본건축", "일본재료", "과기부", "권영웅", "KALIS", "전체평균(추천)"], required=True)
+                "유지": st.column_config.CheckboxColumn("유지", default=True, help="해제 후 [데이터 갱신]을 누르면 제거됩니다"),
             },
-            use_container_width=True,
-            hide_index=True
+            use_container_width=True, hide_index=True, num_rows="fixed",
+            key="recs_editor"
         )
 
-        if st.button("통계 분석 실행", type="primary", use_container_width=True):
-            strength_series = pd.to_numeric(label_df["추정강도"], errors="coerce").dropna()
-            data = sorted(strength_series.astype(float).tolist())
+        b1, b2 = st.columns(2)
+        with b1:
+            if st.button("🔄 데이터 갱신(체크 해제 항목 삭제)", use_container_width=True):
+                keep = edited_recs[edited_recs["유지"] == True].drop(columns=["유지"]).to_dict("records")
+                st.session_state['rebound_records'] = keep
+                st.session_state['rebound_data'] = [r["평균"] for r in keep]
+                st.rerun()
+        with b2:
+            if st.button("🗑️ 전체 초기화", use_container_width=True):
+                st.session_state['rebound_records'] = []
+                st.session_state['rebound_data'] = []
+                st.rerun()
 
-            current_formulas = set(label_df["적용공식"].dropna().astype(str).unique())
-            recommended = set(["일본건축", "일본재료", "전체평균(추천)"] if st_fck < 40 else ["과기부", "권영웅", "KALIS", "전체평균(추천)"])
+        # 공식별 통계
+        formula_cols = [c for c in ["일본재료", "일본건축", "과기부", "권영웅", "KALIS"] if c in edited_recs.columns]
+        active_recs = edited_recs[edited_recs["유지"] == True]
 
-            if not current_formulas.issubset(recommended):
-                st.warning(f"⚠️ 주의: 현재 설계강도({st_fck}MPa) 기준, 일부 선택된 공식은 적합하지 않을 수 있습니다.")
+        if len(active_recs) >= 2 and formula_cols:
+            stats_rows = []
+            for fcol in formula_cols:
+                vals = pd.to_numeric(active_recs[fcol], errors="coerce").dropna()
+                if len(vals) >= 2:
+                    mu = float(vals.mean())
+                    sd = float(vals.std(ddof=1))
+                    cv = (sd / mu * 100.0) if mu else np.nan
+                    stats_rows.append({
+                        "공식": fcol,
+                        "지점수": len(vals),
+                        "평균(MPa)": round(mu, 2),
+                        "표준편차σ": round(sd, 2),
+                        "변동계수CV(%)": round(cv, 2) if np.isfinite(cv) else np.nan,
+                        "강도비(%)": round(mu / st_fck * 100, 1) if st_fck else np.nan,
+                    })
 
-            if len(data) >= 2:
-                avg_v = float(np.mean(data))
-                std_v = float(np.std(data, ddof=1))
-                cv_v = (std_v / avg_v * 100.0) if avg_v != 0 else np.nan
+            if stats_rows:
+                stats_df = pd.DataFrame(stats_rows).sort_values("변동계수CV(%)").reset_index(drop=True)
+                # 최저 CV = 추천 공식
+                best = stats_df.iloc[0]
+                worst = stats_df.iloc[-1]
 
-                with st.container(border=True):
-                    m1, m2, m3 = st.columns(3)
-                    m1.metric("평균", f"{avg_v:.2f} MPa", delta=f"{(avg_v / st_fck * 100):.1f}%")
-                    m2.metric("표준편차 (σ)", f"{std_v:.2f} MPa")
-                    m3.metric("변동계수 (CV)", f"{cv_v:.1f}%" if np.isfinite(cv_v) else "N/A")
+                st.success(f"✅ **추천 공식: {best['공식']}** "
+                           f"(CV = {best['변동계수CV(%)']:.2f}%, 평균 {best['평균(MPa)']:.2f} MPa, "
+                           f"강도비 {best['강도비(%)']:.1f}%)")
+                st.caption(f"※ 변동계수가 가장 낮은 공식이 해당 시설물의 콘크리트 특성에 가장 일관된 결과를 보입니다. "
+                           f"가장 부적합: {worst['공식']} (CV {worst['변동계수CV(%)']:.2f}%)")
 
-                chart = alt.Chart(pd.DataFrame({"번호": range(1, len(data) + 1), "강도": data})).mark_bar().encode(
-                    x='번호:O',
-                    y='강도:Q',
-                    color=alt.condition(alt.datum.강도 >= st_fck, alt.value('#4D96FF'), alt.value('#FF6B6B'))
-                )
-                rule = alt.Chart(pd.DataFrame({'y': [st_fck]})).mark_rule(color='red', strokeDash=[5, 3], size=2).encode(y='y')
+                # 설계강도별 권장 공식과의 일치 여부 안내
+                recommended_set = ({"일본건축", "일본재료"} if st_fck < 40
+                                   else {"과기부", "권영웅", "KALIS"})
+                if best["공식"] not in recommended_set:
+                    st.warning(f"⚠️ 자동 추천 공식({best['공식']})이 설계강도 {st_fck}MPa 기준 "
+                               f"권장 공식군({', '.join(recommended_set)})과 다릅니다. "
+                               f"책임기술자 검토 후 채택 여부를 결정하세요.")
 
-                st.altair_chart(chart + rule, use_container_width=True)
-            else:
-                st.warning("통계 분석을 위해서는 유효한 숫자 데이터가 최소 2개 필요합니다.")
+                st.dataframe(stats_df, use_container_width=True, hide_index=True)
 
+                # 공식별 CV 차트
+                cv_chart = alt.Chart(stats_df).mark_bar().encode(
+                    x=alt.X("공식:N", sort=stats_df["공식"].tolist()),
+                    y=alt.Y("변동계수CV(%):Q"),
+                    color=alt.condition(
+                        alt.datum["공식"] == best["공식"],
+                        alt.value("#2ecc71"),
+                        alt.value("#95a5a6")
+                    )
+                ).properties(height=280, title="공식별 변동계수 비교 (낮을수록 안정적)")
+                st.altair_chart(cv_chart, use_container_width=True)
+
+                # 지점별 공식 결과 분포
+                melted = active_recs.melt(id_vars=["지점"],
+                                           value_vars=formula_cols,
+                                           var_name="공식", value_name="강도")
+                melted["강도"] = pd.to_numeric(melted["강도"], errors="coerce")
+                point_chart = alt.Chart(melted).mark_circle(size=80, opacity=0.7).encode(
+                    x=alt.X("지점:N"),
+                    y=alt.Y("강도:Q", title="추정강도(MPa)"),
+                    color="공식:N",
+                    tooltip=["지점", "공식", "강도"]
+                ).properties(height=300, title="지점별 공식 결과 분포")
+                fck_rule = alt.Chart(pd.DataFrame({"y": [st_fck]})).mark_rule(
+                    color="red", strokeDash=[5, 3]).encode(y="y")
+                st.altair_chart(point_chart + fck_rule, use_container_width=True)
+
+                # 통계 PDF
+                with st.expander("📄 통계·비교 PDF 보고서 다운로드", expanded=False):
+                    summary_st = {
+                        "프로젝트명": p_name,
+                        "기준 설계강도": f"{st_fck:.1f} MPa",
+                        "평가 지점 수": len(active_recs),
+                        "추천 공식": f"{best['공식']} (CV {best['변동계수CV(%)']:.2f}%)",
+                        "추천 공식 평균강도": f"{best['평균(MPa)']:.2f} MPa",
+                        "강도비(설계 대비)": f"{best['강도비(%)']:.1f} %",
+                    }
+                    try:
+                        pdf_bytes = generate_pdf_report(
+                            project_name=p_name, report_type="통계·비교",
+                            summary_dict=summary_st, detail_df=stats_df,
+                            notes="변동계수(CV) 최저 공식이 해당 시설물 콘크리트 특성에 가장 안정적이며, "
+                                  "설계강도 기준 권장 공식군과의 일치 여부를 함께 검토하여 채택하시기 바랍니다."
+                        )
+                        st.download_button("📥 PDF 다운로드", data=pdf_bytes,
+                                          file_name=f"{p_name}_통계비교_보고서.pdf",
+                                          mime="application/pdf", use_container_width=True)
+                    except RuntimeError as e:
+                        st.warning(str(e))
+        else:
+            st.info("공식별 비교는 최소 2개 지점이 필요합니다.")
+
+    else:
+        st.info("⬅️ 먼저 '반발경도' 탭에서 단일 지점 평가를 수행하고 [통계 분석 목록에 추가] 버튼을 눌러주세요.")
+
+    # ----- 2) 수동 입력 강도 데이터 통계 (기존 호환) -----
+    st.divider()
+    with st.expander("📋 수동 입력 강도 데이터 통계 (간이 분석)", expanded=False):
+        session_data_str = " ".join([f"{x:.1f}" for x in st.session_state['rebound_data']])
+        default_stat_txt = session_data_str if session_data_str else "24.5 26.2 23.1 21.8 25.5 27.0"
+
+        raw_txt = st.text_area("강도 데이터 목록", default_stat_txt, height=68, key="stat_raw")
+        parsed = parse_readings_text(raw_txt)
+
+        if parsed and len(parsed) >= 2:
+            data = sorted(parsed)
+            avg_v = float(np.mean(data))
+            std_v = float(np.std(data, ddof=1))
+            cv_v = (std_v / avg_v * 100.0) if avg_v != 0 else np.nan
+
+            with st.container(border=True):
+                m1, m2, m3 = st.columns(3)
+                m1.metric("평균", f"{avg_v:.2f} MPa", delta=f"{(avg_v / st_fck * 100):.1f}%")
+                m2.metric("표준편차 (σ)", f"{std_v:.2f} MPa")
+                m3.metric("변동계수 (CV)", f"{cv_v:.1f}%" if np.isfinite(cv_v) else "N/A")
+
+            chart = alt.Chart(pd.DataFrame({"번호": range(1, len(data) + 1), "강도": data})).mark_bar().encode(
+                x='번호:O', y='강도:Q',
+                color=alt.condition(alt.datum.강도 >= st_fck, alt.value('#4D96FF'), alt.value('#FF6B6B'))
+            )
+            rule = alt.Chart(pd.DataFrame({'y': [st_fck]})).mark_rule(color='red', strokeDash=[5, 3], size=2).encode(y='y')
+            st.altair_chart(chart + rule, use_container_width=True)
+        elif parsed:
+            st.warning("최소 2개 이상의 숫자가 필요합니다.")
