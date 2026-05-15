@@ -105,6 +105,81 @@ if 'rebound_data' not in st.session_state:
 if 'rebound_records' not in st.session_state:
     st.session_state['rebound_records'] = []  # list of dict: {"지점","일본재료","일본건축","과기부","권영웅","KALIS","평균"}
 
+# 단일 반발경도 계산 결과 보관용
+# Streamlit은 버튼 클릭 때마다 전체 스크립트를 다시 실행하므로,
+# 계산 결과와 통계 추가 대상은 session_state에 저장해야 합니다.
+if 'last_rebound_result' not in st.session_state:
+    st.session_state['last_rebound_result'] = None
+
+if 'last_rebound_meta' not in st.session_state:
+    st.session_state['last_rebound_meta'] = {}
+
+if 'last_rebound_error' not in st.session_state:
+    st.session_state['last_rebound_error'] = None
+
+if 'last_added_signature' not in st.session_state:
+    st.session_state['last_added_signature'] = None
+
+if 'last_add_message' not in st.session_state:
+    st.session_state['last_add_message'] = None
+
+if 'add_point_name' not in st.session_state:
+    st.session_state['add_point_name'] = f"P{len(st.session_state['rebound_records']) + 1}"
+
+
+def _make_rebound_record(point_name, res):
+    """통계·비교 탭에 누적할 반발경도 결과 1건 생성"""
+    rec = {
+        "지점": str(point_name).strip() or f"P{len(st.session_state['rebound_records']) + 1}",
+        "평균": round(float(res["Mean_Strength"]), 2),
+    }
+    for k, v in res.get("Formulas", {}).items():
+        rec[k] = round(float(v), 2)
+    return rec
+
+
+def _make_rebound_signature(point_name, res):
+    """동일 지점명·동일 계산값의 중복 추가를 막기 위한 서명"""
+    formula_sig = tuple(
+        (k, round(float(v), 6))
+        for k, v in sorted(res.get("Formulas", {}).items())
+    )
+    return (
+        str(point_name).strip(),
+        round(float(res.get("Mean_Strength", 0.0)), 6),
+        round(float(res.get("R_avg", 0.0)), 6),
+        round(float(res.get("R0", 0.0)), 6),
+        round(float(res.get("Age_Coeff", 0.0)), 6),
+        round(float(res.get("Core_Coeff", 0.0)), 6),
+        formula_sig,
+    )
+
+
+def add_current_rebound_to_stats():
+    """최근 단일 계산 결과를 통계 분석 목록에 추가하는 버튼 콜백"""
+    res = st.session_state.get('last_rebound_result')
+    if not res:
+        st.session_state['last_add_message'] = ("error", "먼저 [계산 실행]을 눌러 단일 반발경도 결과를 산출하세요.")
+        return
+
+    point_name = str(st.session_state.get('add_point_name', '')).strip()
+    if not point_name:
+        point_name = f"P{len(st.session_state['rebound_records']) + 1}"
+
+    signature = _make_rebound_signature(point_name, res)
+    if st.session_state.get('last_added_signature') == signature:
+        st.session_state['last_add_message'] = ("warning", f"{point_name}은 이미 통계 분석 목록에 추가된 결과입니다.")
+        return
+
+    rec = _make_rebound_record(point_name, res)
+    st.session_state['rebound_records'].append(rec)
+    st.session_state['rebound_data'].append(rec['평균'])
+    st.session_state['last_added_signature'] = signature
+    st.session_state['last_add_message'] = ("success", f"{point_name} 추가 완료 (평균 {rec['평균']:.2f} MPa, 5개 공식값 포함)")
+
+    # 다음 입력 기본값을 다음 지점 번호로 갱신
+    st.session_state['add_point_name'] = f"P{len(st.session_state['rebound_records']) + 1}"
+
 
 def is_mobile_client():
     """간단한 UA 기반 모바일/태블릿 판별"""
@@ -981,84 +1056,139 @@ with tab2:
                 require_20_points=True
             )
             if ok:
-                st.success(f"평균 추정 압축강도(코어보정 반영): **{res['Mean_Strength']:.2f} MPa**")
-
-                with st.container(border=True):
-                    r1, r2, r3 = st.columns(3)
-                    r1.metric("유효 평균 R", f"{res['R_avg']:.3f}")
-                    r2.metric("각도 보정 ΔR(엑셀식)", f"{res['Angle_Corr']:+.6f}")
-                    r3.metric("정점수/기각", f"{res['N']} / {res['Discard']}")
-
-                    r4, r5, r6 = st.columns(3)
-                    r4.metric("최종 R₀", f"{res['R0']:.6f}")
-                    r5.metric("재령 계수 α", f"{res['Age_Coeff']:.2f}")
-                    r6.metric("Ct", f"{res['Core_Coeff']:.2f}")
-
-                # 데이터 연동 버튼
-                add_col1, add_col2 = st.columns(2)
-                with add_col1:
-                    point_name = st.text_input("지점명", value=f"P{len(st.session_state['rebound_records'])+1}",
-                                               key="add_point_name")
-                with add_col2:
-                    if st.button("➕ 통계 분석 목록에 추가", key="add_to_stats", use_container_width=True):
-                        st.session_state['rebound_data'].append(res['Mean_Strength'])
-                        rec = {"지점": point_name, "평균": round(res['Mean_Strength'], 2)}
-                        for k, v in res["Formulas"].items():
-                            rec[k] = round(v, 2)
-                        st.session_state['rebound_records'].append(rec)
-                        st.success(f"{point_name} 추가 완료 (평균 {res['Mean_Strength']:.2f} MPa, 5개 공식값 포함)")
-
-                df_f = pd.DataFrame({"공식": list(res["Formulas"].keys()), "강도": list(res["Formulas"].values())})
-                chart = alt.Chart(df_f).mark_bar().encode(
-                    x=alt.X('공식', sort=None),
-                    y='강도',
-                    color=alt.condition(alt.datum.강도 >= fck, alt.value('#4D96FF'), alt.value('#FF6B6B'))
-                ).properties(height=350)
-
-                rule_chart = alt.Chart(pd.DataFrame({'y': [fck]})).mark_rule(color='red', strokeDash=[5, 3], size=2).encode(y='y')
-                st.altair_chart(chart + rule_chart, use_container_width=True)
-
-                # ----- PDF 보고서 다운로드 -----
-                with st.expander("📄 PDF 보고서 다운로드 (정밀안전점검 부록용)", expanded=False):
-                    summary = {
-                        "프로젝트명": p_name,
-                        "타격 방향": f"{angle}°",
-                        "재령(일)": int(days),
-                        "설계강도(MPa)": f"{fck:.1f}",
-                        "측정점수 / 기각수": f"{res['N']} / {res['Discard']}",
-                        "유효 평균 R": f"{res['R_avg']:.3f}",
-                        "타격방향 보정 ΔR": f"{res['Angle_Corr']:+.4f}",
-                        "보정 R₀": f"{res['R0']:.4f}",
-                        "재령계수 α": f"{res['Age_Coeff']:.3f}",
-                        "코어 보정계수 Ct": f"{res['Core_Coeff']:.2f}",
-                        "평균 추정 압축강도": f"{res['Mean_Strength']:.2f} MPa",
-                        "강도비(설계 대비)": f"{(res['Mean_Strength']/fck*100):.1f} %" if fck else "-",
-                    }
-                    detail_pdf = pd.DataFrame({
-                        "공식": list(res["Formulas"].keys()),
-                        "강도(MPa)": [f"{v:.2f}" for v in res["Formulas"].values()],
-                        "강도비(%)": [f"{(v/fck*100):.1f}" if fck else "-" for v in res["Formulas"].values()],
-                    })
-                    try:
-                        pdf_bytes = generate_pdf_report(
-                            project_name=p_name,
-                            report_type="반발경도",
-                            summary_dict=summary,
-                            detail_df=detail_pdf,
-                            notes=f"적용 공식: {', '.join(selected_methods) if selected_methods else '자동추천'}\n"
-                                  f"기각 데이터: {res['Excluded']}"
-                        )
-                        st.download_button(
-                            "📥 PDF 다운로드",
-                            data=pdf_bytes,
-                            file_name=f"{p_name}_반발경도_보고서.pdf",
-                            mime="application/pdf",
-                            use_container_width=True
-                        )
-                    except RuntimeError as e:
-                        st.warning(str(e))
+                st.session_state['last_rebound_result'] = res
+                st.session_state['last_rebound_meta'] = {
+                    "project_name": p_name,
+                    "angle": angle,
+                    "days": days,
+                    "fck": fck,
+                    "ct": ct,
+                    "selected_methods": list(selected_methods) if selected_methods else [],
+                    "raw_text": txt,
+                    "readings": rd,
+                }
+                st.session_state['last_rebound_error'] = None
+                # 새 계산 결과는 다시 통계 목록에 추가할 수 있도록 중복 방지 서명을 초기화
+                st.session_state['last_added_signature'] = None
+                st.session_state['last_add_message'] = None
+                st.session_state['add_point_name'] = f"P{len(st.session_state['rebound_records']) + 1}"
             else:
-                st.error(res)
+                st.session_state['last_rebound_result'] = None
+                st.session_state['last_rebound_meta'] = {}
+                st.session_state['last_rebound_error'] = res
+                st.session_state['last_add_message'] = None
+
+        # ---------------------------------------------------------
+        # 최근 단일 계산 결과 표시 + 통계 분석 목록 추가
+        # 중요: 이 블록은 [계산 실행] 버튼 if문 밖에 있어야 합니다.
+        # 버튼 클릭 시 Streamlit이 전체 스크립트를 재실행하므로,
+        # 결과를 session_state에서 다시 불러와야 [통계 분석 목록에 추가]가 정상 동작합니다.
+        # ---------------------------------------------------------
+        if st.session_state.get('last_rebound_error'):
+            st.error(st.session_state['last_rebound_error'])
+
+        res = st.session_state.get('last_rebound_result')
+        meta = st.session_state.get('last_rebound_meta', {}) or {}
+
+        if res is not None:
+            result_fck = float(meta.get("fck", fck))
+            result_angle = meta.get("angle", angle)
+            result_days = meta.get("days", days)
+            result_methods = meta.get("selected_methods", selected_methods)
+
+            st.success(f"평균 추정 압축강도(코어보정 반영): **{res['Mean_Strength']:.2f} MPa**")
+            st.caption("※ 아래 결과는 마지막으로 [계산 실행]을 누른 시점의 입력값 기준입니다. 입력값을 변경한 경우 다시 계산하세요.")
+
+            with st.container(border=True):
+                r1, r2, r3 = st.columns(3)
+                r1.metric("유효 평균 R", f"{res['R_avg']:.3f}")
+                r2.metric("각도 보정 ΔR(엑셀식)", f"{res['Angle_Corr']:+.6f}")
+                r3.metric("정점수/기각", f"{res['N']} / {res['Discard']}")
+
+                r4, r5, r6 = st.columns(3)
+                r4.metric("최종 R₀", f"{res['R0']:.6f}")
+                r5.metric("재령 계수 α", f"{res['Age_Coeff']:.2f}")
+                r6.metric("Ct", f"{res['Core_Coeff']:.2f}")
+
+            # 데이터 연동 버튼: 계산 버튼 밖에서 항상 렌더링
+            add_col1, add_col2 = st.columns(2)
+            with add_col1:
+                st.text_input(
+                    "지점명",
+                    key="add_point_name"
+                )
+            with add_col2:
+                st.button(
+                    "➕ 통계 분석 목록에 추가",
+                    key="add_to_stats",
+                    use_container_width=True,
+                    on_click=add_current_rebound_to_stats
+                )
+
+            # 추가 결과 메시지 표시
+            add_msg = st.session_state.get('last_add_message')
+            if add_msg:
+                msg_type, msg_text = add_msg
+                if msg_type == "success":
+                    st.success(msg_text)
+                elif msg_type == "warning":
+                    st.warning(msg_text)
+                elif msg_type == "error":
+                    st.error(msg_text)
+                else:
+                    st.info(msg_text)
+
+            st.caption(f"현재 통계 분석 목록: {len(st.session_state['rebound_records'])}개 지점")
+
+            df_f = pd.DataFrame({"공식": list(res["Formulas"].keys()), "강도": list(res["Formulas"].values())})
+            chart = alt.Chart(df_f).mark_bar().encode(
+                x=alt.X('공식', sort=None),
+                y='강도',
+                color=alt.condition(alt.datum.강도 >= result_fck, alt.value('#4D96FF'), alt.value('#FF6B6B'))
+            ).properties(height=350)
+
+            rule_chart = alt.Chart(pd.DataFrame({'y': [result_fck]})).mark_rule(color='red', strokeDash=[5, 3], size=2).encode(y='y')
+            st.altair_chart(chart + rule_chart, use_container_width=True)
+
+            # ----- PDF 보고서 다운로드 -----
+            with st.expander("📄 PDF 보고서 다운로드 (정밀안전점검 부록용)", expanded=False):
+                summary = {
+                    "프로젝트명": meta.get("project_name", p_name),
+                    "타격 방향": f"{result_angle}°",
+                    "재령(일)": int(result_days),
+                    "설계강도(MPa)": f"{result_fck:.1f}",
+                    "측정점수 / 기각수": f"{res['N']} / {res['Discard']}",
+                    "유효 평균 R": f"{res['R_avg']:.3f}",
+                    "타격방향 보정 ΔR": f"{res['Angle_Corr']:+.4f}",
+                    "보정 R₀": f"{res['R0']:.4f}",
+                    "재령계수 α": f"{res['Age_Coeff']:.3f}",
+                    "코어 보정계수 Ct": f"{res['Core_Coeff']:.2f}",
+                    "평균 추정 압축강도": f"{res['Mean_Strength']:.2f} MPa",
+                    "강도비(설계 대비)": f"{(res['Mean_Strength']/result_fck*100):.1f} %" if result_fck else "-",
+                }
+                detail_pdf = pd.DataFrame({
+                    "공식": list(res["Formulas"].keys()),
+                    "강도(MPa)": [f"{v:.2f}" for v in res["Formulas"].values()],
+                    "강도비(%)": [f"{(v/result_fck*100):.1f}" if result_fck else "-" for v in res["Formulas"].values()],
+                })
+                try:
+                    pdf_bytes = generate_pdf_report(
+                        project_name=p_name,
+                        report_type="반발경도",
+                        summary_dict=summary,
+                        detail_df=detail_pdf,
+                        notes=f"적용 공식: {', '.join(result_methods) if result_methods else '자동추천'}\n"
+                              f"기각 데이터: {res['Excluded']}"
+                    )
+                    st.download_button(
+                        "📥 PDF 다운로드",
+                        data=pdf_bytes,
+                        file_name=f"{p_name}_반발경도_보고서.pdf",
+                        mime="application/pdf",
+                        use_container_width=True
+                    )
+                except RuntimeError as e:
+                    st.warning(str(e))
 
     else:
         # ---------------------------------------------------------
