@@ -198,13 +198,122 @@ def is_mobile_client():
 # 반발경도 계산 입력 검증 기준
 # - UI에서 제한하더라도 엑셀/텍스트/직접 호출을 통해 비정상 값이 들어올 수 있으므로
 #   최종 계산 함수에서 한 번 더 검증합니다.
-# - 20개 정확히 강제 여부는 별도 정책 이슈이므로, 여기서는 기존처럼 최소 20개 기준을 유지합니다.
+# - 측정점수 정책은 "정확히 20개"와 "20개 이상 허용"을 명시적으로 분리합니다.
 ALLOWED_REBOUND_ANGLES = {-90, -45, 0, 45, 90}
 REBOUND_READING_MIN = 10.0
 REBOUND_READING_MAX = 100.0
 REBOUND_FORMULA_OPTIONS = ["일본재료", "일본건축", "과기부", "권영웅", "KALIS"]
 REBOUND_FORMULA_NAMES = set(REBOUND_FORMULA_OPTIONS)
 REBOUND_FORMULA_RECOMMEND_THRESHOLD = 40.0
+
+REBOUND_POINT_POLICY_EXACT_20 = "exact_20"
+REBOUND_POINT_POLICY_MIN_20 = "min_20"
+REBOUND_POINT_POLICY_NO_MINIMUM = "no_minimum"  # 내부/테스트용: 지침 검증을 끄는 경우
+DEFAULT_REBOUND_POINT_POLICY = REBOUND_POINT_POLICY_EXACT_20
+REBOUND_DISCARD_COUNT_LIMIT_20 = 5
+REBOUND_DISCARD_RATIO_LIMIT = 0.25
+
+REBOUND_POINT_POLICY_OPTIONS = {
+    REBOUND_POINT_POLICY_EXACT_20: {
+        "label": "정확히 20개",
+        "short_label": "정확히20",
+        "description": "1개소당 측정값을 정확히 20개로 제한합니다. 기각값이 5개 이상이면 시험 무효입니다.",
+    },
+    REBOUND_POINT_POLICY_MIN_20: {
+        "label": "20개 이상 허용",
+        "short_label": "20개이상",
+        "description": "측정값을 20개 이상 허용합니다. 기각 기준은 20개 중 5개에 해당하는 25% 이상으로 판정합니다.",
+    },
+    REBOUND_POINT_POLICY_NO_MINIMUM: {
+        "label": "측정점수 제한 없음",
+        "short_label": "제한없음",
+        "description": "내부 검증용 정책입니다. 일반 현장 계산에서는 사용하지 않는 것을 권장합니다.",
+    },
+}
+
+REBOUND_POINT_POLICY_LABEL_TO_KEY = {}
+for _policy_key, _policy_meta in REBOUND_POINT_POLICY_OPTIONS.items():
+    REBOUND_POINT_POLICY_LABEL_TO_KEY[_policy_key] = _policy_key
+    REBOUND_POINT_POLICY_LABEL_TO_KEY[_policy_meta["label"]] = _policy_key
+    REBOUND_POINT_POLICY_LABEL_TO_KEY[_policy_meta["short_label"]] = _policy_key
+
+# 사용자가 엑셀에 조금 다른 표현으로 적어도 읽을 수 있도록 별칭을 허용합니다.
+REBOUND_POINT_POLICY_LABEL_TO_KEY.update({
+    "정확히 20": REBOUND_POINT_POLICY_EXACT_20,
+    "정확히20개": REBOUND_POINT_POLICY_EXACT_20,
+    "20": REBOUND_POINT_POLICY_EXACT_20,
+    "exact": REBOUND_POINT_POLICY_EXACT_20,
+    "exact20": REBOUND_POINT_POLICY_EXACT_20,
+    "exact_20": REBOUND_POINT_POLICY_EXACT_20,
+    "20개 이상": REBOUND_POINT_POLICY_MIN_20,
+    "20개이상허용": REBOUND_POINT_POLICY_MIN_20,
+    "최소20": REBOUND_POINT_POLICY_MIN_20,
+    "min20": REBOUND_POINT_POLICY_MIN_20,
+    "min_20": REBOUND_POINT_POLICY_MIN_20,
+    "at_least_20": REBOUND_POINT_POLICY_MIN_20,
+    "제한 없음": REBOUND_POINT_POLICY_NO_MINIMUM,
+    "제한없음": REBOUND_POINT_POLICY_NO_MINIMUM,
+    "none": REBOUND_POINT_POLICY_NO_MINIMUM,
+    "no_minimum": REBOUND_POINT_POLICY_NO_MINIMUM,
+})
+
+
+def normalize_rebound_point_policy(point_count_policy=None, require_20_points=True):
+    """
+    측정점수 정책을 내부 key로 정규화합니다.
+
+    기존 코드 호환성:
+    - point_count_policy가 None이고 require_20_points=True이면 기본값 "정확히 20개"를 사용합니다.
+    - point_count_policy가 None이고 require_20_points=False이면 내부용 "제한 없음"으로 처리합니다.
+    """
+    if point_count_policy is None:
+        return DEFAULT_REBOUND_POINT_POLICY if require_20_points else REBOUND_POINT_POLICY_NO_MINIMUM
+
+    policy_text = str(point_count_policy).strip()
+    if not policy_text:
+        return DEFAULT_REBOUND_POINT_POLICY if require_20_points else REBOUND_POINT_POLICY_NO_MINIMUM
+
+    policy_key = REBOUND_POINT_POLICY_LABEL_TO_KEY.get(policy_text)
+    if policy_key:
+        return policy_key
+
+    normalized = policy_text.lower().replace(" ", "").replace("-", "_")
+    policy_key = REBOUND_POINT_POLICY_LABEL_TO_KEY.get(normalized)
+    if policy_key:
+        return policy_key
+
+    allowed = ", ".join(meta["label"] for key, meta in REBOUND_POINT_POLICY_OPTIONS.items()
+                        if key != REBOUND_POINT_POLICY_NO_MINIMUM)
+    raise ValueError(f"알 수 없는 측정점수 정책입니다: {point_count_policy!r}. 허용값: {allowed}")
+
+
+def get_rebound_point_policy_label(point_count_policy):
+    policy_key = normalize_rebound_point_policy(point_count_policy)
+    return REBOUND_POINT_POLICY_OPTIONS[policy_key]["label"]
+
+
+def get_rebound_point_policy_description(point_count_policy):
+    policy_key = normalize_rebound_point_policy(point_count_policy)
+    return REBOUND_POINT_POLICY_OPTIONS[policy_key]["description"]
+
+
+def get_rebound_point_policy_short_label(point_count_policy):
+    policy_key = normalize_rebound_point_policy(point_count_policy)
+    return REBOUND_POINT_POLICY_OPTIONS[policy_key]["short_label"]
+
+
+def get_discard_limit_for_policy(point_count, point_count_policy):
+    """측정점수 정책별 기각 무효 기준 개수를 반환합니다."""
+    n = int(point_count)
+    policy_key = normalize_rebound_point_policy(point_count_policy)
+
+    if policy_key == REBOUND_POINT_POLICY_EXACT_20:
+        return REBOUND_DISCARD_COUNT_LIMIT_20
+
+    if policy_key in (REBOUND_POINT_POLICY_MIN_20, REBOUND_POINT_POLICY_NO_MINIMUM):
+        return max(1, int(math.ceil(n * REBOUND_DISCARD_RATIO_LIMIT)))
+
+    return REBOUND_DISCARD_COUNT_LIMIT_20
 
 
 def get_recommended_formulas(design_fck):
@@ -784,7 +893,8 @@ def calculate_strength(
     design_fck=24.0,
     selected_formulas=None,
     core_coeff=1.0,          # Ct
-    require_20_points=True   # 최소 20점 강제
+    require_20_points=True,  # 기존 호출부 호환용
+    point_count_policy=None  # exact_20 / min_20
 ):
     # 계산 전 최종 방어선: 텍스트/엑셀/UI 어디에서 들어온 값이든 여기서 검증합니다.
     valid_input, validated = validate_rebound_inputs(
@@ -807,23 +917,58 @@ def calculate_strength(
 
     n = len(rd)
 
-    # 최소 20점 기준
-    if require_20_points and n < 20:
-        return False, f"시험 무효: 측정점수 {n}개 (지침상 1개소당 20점 이상 필요)"
+    # 측정점수 정책 명확화
+    try:
+        point_policy = normalize_rebound_point_policy(point_count_policy, require_20_points=require_20_points)
+    except ValueError as e:
+        return False, str(e)
+
+    point_policy_label = get_rebound_point_policy_label(point_policy)
+    point_policy_description = get_rebound_point_policy_description(point_policy)
+
+    if point_policy == REBOUND_POINT_POLICY_EXACT_20 and n != 20:
+        return False, (
+            f"시험 무효: 측정점수 {n}개 입력됨. "
+            "현재 정책은 '정확히 20개'이므로 1개소당 측정값을 정확히 20개로 입력하세요."
+        )
+
+    if point_policy == REBOUND_POINT_POLICY_MIN_20 and n < 20:
+        return False, (
+            f"시험 무효: 측정점수 {n}개 입력됨. "
+            "현재 정책은 '20개 이상 허용'이므로 최소 20개 이상 입력해야 합니다."
+        )
+
+    if point_policy == REBOUND_POINT_POLICY_NO_MINIMUM and n < 1:
+        return False, "시험 무효: 측정값이 없습니다."
 
     # 1차 평균
     avg1 = float(np.mean(rd))
 
     # ±20% 기각 (마스크 기반: 중복값 오류 방지)
     low, high = avg1 * 0.8, avg1 * 1.2
-    valid_mask = [(low <= r <= high) for r in rd]
+    # 경계값(정확히 ±20%)이 부동소수점 오차로 기각되지 않도록 작은 허용오차를 둡니다.
+    boundary_tol = 1e-12
+    valid_mask = [(low - boundary_tol <= r <= high + boundary_tol) for r in rd]
     valid = [r for r, m in zip(rd, valid_mask) if m]
     excluded = [r for r, m in zip(rd, valid_mask) if not m]
 
-    # 기각 5개 이상 시 무효 (지침: 20점 중 5개 이상 ±20% 벗어나면 재시험)
+    # 기각 판정 기준
+    # - 정확히 20개 정책: 지침 문구 그대로 5개 이상 기각 시 무효
+    # - 20개 이상 허용 정책: 20개 중 5개와 같은 25% 이상 기각 시 무효
     discard_ratio = (len(excluded) / n) if n else 1.0
-    if len(excluded) >= 5:
-        return False, f"시험 무효: 기각 {len(excluded)}개({discard_ratio*100:.1f}%) → 재시험 권장 (지침상 5개 이상 기각 시 무효)"
+    discard_limit = get_discard_limit_for_policy(n, point_policy)
+    if point_policy == REBOUND_POINT_POLICY_EXACT_20:
+        discard_rule = f"기각 {REBOUND_DISCARD_COUNT_LIMIT_20}개 이상"
+    elif point_policy == REBOUND_POINT_POLICY_MIN_20:
+        discard_rule = f"기각률 {REBOUND_DISCARD_RATIO_LIMIT * 100:.0f}% 이상(현재 {discard_limit}개 이상)"
+    else:
+        discard_rule = f"기각률 {REBOUND_DISCARD_RATIO_LIMIT * 100:.0f}% 이상(현재 {discard_limit}개 이상, 내부용)"
+
+    if len(excluded) >= discard_limit:
+        return False, (
+            f"시험 무효: 기각 {len(excluded)}개({discard_ratio*100:.1f}%) → 재시험 권장 "
+            f"(측정점수 정책: {point_policy_label}, 기각 기준: {discard_rule})"
+        )
 
     if len(valid) == 0:
         return False, "유효 데이터 없음 (±20% 범위 내 값이 없습니다)"
@@ -877,6 +1022,7 @@ def calculate_strength(
 
     return True, {
         "N": n,
+        "Effective_N": len(valid),
         "R_initial": avg1,
         "R_avg": R_avg,
         "Angle_Corr": corr,
@@ -886,7 +1032,13 @@ def calculate_strength(
         "Design_Fck": design_fck,
         "Angle": angle,
         "Days": days,
+        "Point_Count_Policy": point_policy,
+        "Point_Count_Policy_Label": point_policy_label,
+        "Point_Count_Policy_Description": point_policy_description,
         "Discard": len(excluded),
+        "Discard_Ratio": discard_ratio,
+        "Discard_Limit": discard_limit,
+        "Discard_Rule": discard_rule,
         "Excluded": excluded,
         "Formulas": all_formulas,
         "Formulas_Raw": all_formulas_raw,
@@ -1180,6 +1332,37 @@ def run_validation_tests():
         "수동 미선택": res6d,
     }))
 
+    # ----- TC7: 측정점수 정책 명확화 검증 -----
+    ok7a, res7a = calculate_strength([50] * 20, angle=0, days=3000, design_fck=24, core_coeff=1.0,
+                                      point_count_policy=REBOUND_POINT_POLICY_EXACT_20)
+    ok7b, res7b = calculate_strength([50] * 19, angle=0, days=3000, design_fck=24, core_coeff=1.0,
+                                      point_count_policy=REBOUND_POINT_POLICY_EXACT_20)
+    ok7c, res7c = calculate_strength([50] * 21, angle=0, days=3000, design_fck=24, core_coeff=1.0,
+                                      point_count_policy=REBOUND_POINT_POLICY_EXACT_20)
+    ok7d, res7d = calculate_strength([50] * 21, angle=0, days=3000, design_fck=24, core_coeff=1.0,
+                                      point_count_policy=REBOUND_POINT_POLICY_MIN_20)
+    ok7e, res7e = calculate_strength([50] * 19 + [20] * 5, angle=0, days=3000, design_fck=24, core_coeff=1.0,
+                                      point_count_policy=REBOUND_POINT_POLICY_MIN_20)
+    ok7f, res7f = calculate_strength([50] * 18 + [20] * 6, angle=0, days=3000, design_fck=24, core_coeff=1.0,
+                                      point_count_policy=REBOUND_POINT_POLICY_MIN_20)
+
+    tc7_pass = (
+        ok7a and res7a.get("Point_Count_Policy") == REBOUND_POINT_POLICY_EXACT_20 and
+        (not ok7b) and "정확히 20개" in str(res7b) and
+        (not ok7c) and "정확히 20개" in str(res7c) and
+        ok7d and res7d.get("Point_Count_Policy") == REBOUND_POINT_POLICY_MIN_20 and res7d.get("N") == 21 and
+        ok7e and res7e.get("Discard") == 5 and res7e.get("Discard_Limit") == 6 and
+        (not ok7f) and "기각" in str(res7f)
+    )
+    results.append(("TC7(측정점수 정책)", tc7_pass, {
+        "정확히20_20개": res7a.get("Point_Count_Policy_Label") if ok7a else res7a,
+        "정확히20_19개": res7b,
+        "정확히20_21개": res7c,
+        "20개이상_21개": {"N": res7d.get("N"), "정책": res7d.get("Point_Count_Policy_Label")} if ok7d else res7d,
+        "20개이상_24개중5개기각": {"Discard": res7e.get("Discard"), "Discard_Limit": res7e.get("Discard_Limit")} if ok7e else res7e,
+        "20개이상_24개중6개기각": res7f,
+    }))
+
     return results
 
 
@@ -1214,11 +1397,15 @@ with tab1:
     **4. 코어 보정계수(Ct)가 있으면 입력하세요.**
     * 최종 강도 = Ct × 비파괴(반발경도) 강도
 
-    **5. 통계ㆍ비교 탭 활용 안내**
+    **5. 측정점수 정책을 확인하세요.**
+    * 기본값은 [정확히 20개]입니다. 1개소당 20개 측정값만 사용하는 보수적인 방식입니다.
+    * 추가 측정값까지 반영해야 하는 경우 [20개 이상 허용]을 선택할 수 있으며, 이때 기각 기준은 25% 이상으로 적용됩니다.
+
+    **6. 통계ㆍ비교 탭 활용 안내**
     * 반발경도 단일평가 후 [통계 분석 목록에 추가] 버튼을 누르면 5개 공식별 결과가 모두 누적됩니다.
     * 누적된 지점들 간 변동계수(CV)가 가장 낮은 공식을 자동 추천합니다 — 해당 시설물에 가장 안정적인 산정식입니다.
 
-    **6. PDF 보고서 출력**
+    **7. PDF 보고서 출력**
     * 각 평가(반발경도/탄산화/통계) 결과 하단의 [PDF 다운로드] 버튼으로 정밀안전점검 보고서 부록용 PDF를 받을 수 있습니다.
     """)
 
@@ -1231,9 +1418,11 @@ with tab1:
         * 콘크리트 표면을 슈미트 해머로 타격하여 반발되는 거리($R$)를 측정하고, 이와 압축강도 사이의 상관관계를 통해 비파괴 강도를 추정합니다.
 
         #### **✅ 측정 및 기각 룰**
-        1. **타격 점수**: 1개소당 **20점 이상** 측정을 원칙으로 합니다.
+        1. **타격 점수**: 1개소당 **20점 이상** 측정을 원칙으로 하되, 프로그램에서는 정책을 명확히 분리합니다.
+           - **정확히 20개**: 20개가 아니면 계산하지 않으며, 기각값이 **5개 이상**이면 시험 무효입니다.
+           - **20개 이상 허용**: 20개 초과 입력을 허용하며, 기각값이 **전체의 25% 이상**이면 시험 무효입니다.
         2. **이상치 기각**: 전체 측정값의 산술평균을 낸 후, 평균값에서 **±20%를 벗어나는 데이터는 무효**
-        3. **시험 무효**: 기각된 데이터가 **5개 이상**인 경우 재시험 권장
+        3. **시험 무효**: 선택한 측정점수 정책의 기각 기준을 초과하면 재시험 권장
         """)
         m_df = pd.DataFrame({
             "구분": ["상향 수직 (+90°)", "상향 경사 (+45°)", "수평 타격 (0°)", "하향 경사 (-45°)", "하향 수직 (-90°)"],
@@ -1255,7 +1444,7 @@ with tab1:
         """)
 
     with st.expander("🧪 검증용 테스트 케이스 실행(개발/검증)", expanded=False):
-        st.caption("TC1은 첨부 엑셀과 동일한 입력(20점)으로 계산했을 때 Ravg, ΔR, Ro, 강도식 값이 일치하는지 확인합니다.")
+        st.caption("TC1은 첨부 엑셀과 동일한 입력(20점)으로 계산했을 때 Ravg, ΔR, Ro, 강도식 값이 일치하는지 확인합니다. TC7은 측정점수 정책을 검증합니다.")
         if st.button("테스트 실행", type="primary"):
             test_results = run_validation_tests()
             for name, passed, detail in test_results:
@@ -1461,6 +1650,24 @@ with tab2:
                 with c4:
                     ct = st.number_input("코어 보정계수 Ct", 0.10, 2.00, 1.00, step=0.01)
 
+            # 측정점수 정책 선택
+            point_policy_labels = [
+                REBOUND_POINT_POLICY_OPTIONS[REBOUND_POINT_POLICY_EXACT_20]["label"],
+                REBOUND_POINT_POLICY_OPTIONS[REBOUND_POINT_POLICY_MIN_20]["label"],
+            ]
+            point_policy_label = st.radio(
+                "측정점수 정책",
+                point_policy_labels,
+                index=0,
+                horizontal=not mobile_client,
+                help=(
+                    "기본값은 정확히 20개입니다. 추가 측정값을 평균 산정에 포함해야 하는 경우에만 "
+                    "20개 이상 허용을 선택하세요."
+                )
+            )
+            point_count_policy = normalize_rebound_point_policy(point_policy_label)
+            st.info(f"측정점수 정책: {get_rebound_point_policy_description(point_count_policy)}")
+
             # 공식 선택 옵션
             formula_opts = REBOUND_FORMULA_OPTIONS
             recommended_methods = get_recommended_formulas(fck)
@@ -1500,14 +1707,25 @@ with tab2:
                 help="여러 값은 공백, 줄바꿈, 쉼표로 구분할 수 있습니다. 소수점은 58.4처럼 점(.)을 사용하세요."
             )
 
-            # OCR 결과를 20칸 편집 UI로 제공 (txt 기준 동기화)
+            # OCR/텍스트 결과를 표 편집 UI로 제공합니다.
+            # - 정확히 20개 정책: 20칸 고정
+            # - 20개 이상 허용 정책: 입력된 값 개수만큼 행을 표시하고, 20개보다 적으면 20칸 표시
             preview_vals = parse_readings_text(txt)
-            base_vals = (preview_vals + [np.nan] * 20)[:20]
+            if point_count_policy == REBOUND_POINT_POLICY_EXACT_20:
+                grid_row_count = 20
+                grid_num_rows = "fixed"
+                if len(preview_vals) > 20:
+                    st.warning("정확히 20개 정책에서는 입력값이 20개를 초과하면 첫 20개만 편집표에 반영됩니다. 추가값까지 쓰려면 [20개 이상 허용]을 선택하세요.")
+            else:
+                grid_row_count = max(20, len(preview_vals))
+                grid_num_rows = "dynamic"
+
+            base_vals = (preview_vals + [np.nan] * grid_row_count)[:grid_row_count]
             grid_df = pd.DataFrame({
-                "No": list(range(1, 21)),
+                "No": list(range(1, grid_row_count + 1)),
                 "측정값": base_vals
             })
-            grid_key = f"ocr_20_grid_{abs(hash(txt)) % (10**8)}"
+            grid_key = f"ocr_grid_{point_count_policy}_{grid_row_count}_{abs(hash(txt)) % (10**8)}"
             edited_grid = st.data_editor(
                 grid_df,
                 column_config={
@@ -1516,10 +1734,24 @@ with tab2:
                 },
                 hide_index=True,
                 use_container_width=True,
+                num_rows=grid_num_rows,
                 key=grid_key
             )
 
             valid_grid_vals = [float(v) for v in edited_grid["측정값"].tolist() if not pd.isna(v)]
+            input_count = len(valid_grid_vals)
+            if point_count_policy == REBOUND_POINT_POLICY_EXACT_20:
+                if input_count == 20:
+                    st.success("측정값 20개가 입력되었습니다. 정확히 20개 정책 조건을 만족합니다.")
+                else:
+                    st.warning(f"현재 측정값 {input_count}개입니다. 정확히 20개 정책에서는 20개가 필요합니다.")
+            else:
+                if input_count >= 20:
+                    discard_limit_preview = get_discard_limit_for_policy(input_count, point_count_policy)
+                    st.success(f"측정값 {input_count}개가 입력되었습니다. 20개 이상 허용 정책 조건을 만족합니다. 현재 기각 무효 기준은 {discard_limit_preview}개 이상입니다.")
+                else:
+                    st.warning(f"현재 측정값 {input_count}개입니다. 20개 이상 허용 정책에서도 최소 20개가 필요합니다.")
+
             if valid_grid_vals:
                 txt = " ".join([str(int(v)) if abs(v - round(v)) < 1e-6 else f"{v:.1f}" for v in valid_grid_vals])
 
@@ -1530,7 +1762,8 @@ with tab2:
                 design_fck=fck,
                 selected_formulas=selected_methods,
                 core_coeff=ct,
-                require_20_points=True
+                require_20_points=True,
+                point_count_policy=point_count_policy
             )
             if ok:
                 st.session_state['last_rebound_result'] = res
@@ -1544,6 +1777,9 @@ with tab2:
                     "selected_methods": list(selected_methods) if selected_methods else [],
                     "applied_methods": list(res.get("Applied_Formulas", [])),
                     "recommended_methods": list(res.get("Recommended_Formulas", get_recommended_formulas(fck))),
+                    "point_count_policy": res.get("Point_Count_Policy", point_count_policy),
+                    "point_count_policy_label": res.get("Point_Count_Policy_Label", get_rebound_point_policy_label(point_count_policy)),
+                    "discard_rule": res.get("Discard_Rule", ""),
                     "raw_text": txt,
                     "readings": rd,
                 }
@@ -1578,8 +1814,14 @@ with tab2:
             result_methods = meta.get("applied_methods", res.get("Applied_Formulas", []))
             if not result_methods:
                 result_methods = get_recommended_formulas(result_fck)
+            result_point_policy_label = meta.get(
+                "point_count_policy_label",
+                res.get("Point_Count_Policy_Label", get_rebound_point_policy_label(DEFAULT_REBOUND_POINT_POLICY))
+            )
+            result_discard_rule = meta.get("discard_rule", res.get("Discard_Rule", ""))
 
             st.success(f"평균 추정 압축강도(코어보정 반영): **{res['Mean_Strength']:.2f} MPa**")
+            st.caption(f"측정점수 정책: {result_point_policy_label} / 기각 기준: {result_discard_rule}")
             st.caption(f"평균 산정 방식: {result_formula_mode} / 적용 공식: {', '.join(result_methods)}")
             st.caption("※ 아래 결과는 마지막으로 [계산 실행]을 누른 시점의 입력값 기준입니다. 입력값을 변경한 경우 다시 계산하세요.")
 
@@ -1587,7 +1829,7 @@ with tab2:
                 r1, r2, r3 = st.columns(3)
                 r1.metric("유효 평균 R", f"{res['R_avg']:.3f}")
                 r2.metric("각도 보정 ΔR(엑셀식)", f"{res['Angle_Corr']:+.6f}")
-                r3.metric("정점수/기각", f"{res['N']} / {res['Discard']}")
+                r3.metric("측정/유효/기각", f"{res['N']} / {res.get('Effective_N', res['N'] - res['Discard'])} / {res['Discard']}")
 
                 r4, r5, r6 = st.columns(3)
                 r4.metric("최종 R₀", f"{res['R0']:.6f}")
@@ -1641,7 +1883,9 @@ with tab2:
                     "타격 방향": f"{result_angle}°",
                     "재령(일)": int(result_days),
                     "설계강도(MPa)": f"{result_fck:.1f}",
-                    "측정점수 / 기각수": f"{res['N']} / {res['Discard']}",
+                    "측정점수 정책": result_point_policy_label,
+                    "기각 판정 기준": result_discard_rule,
+                    "측정점수 / 유효점수 / 기각수": f"{res['N']} / {res.get('Effective_N', res['N'] - res['Discard'])} / {res['Discard']}",
                     "유효 평균 R": f"{res['R_avg']:.3f}",
                     "타격방향 보정 ΔR": f"{res['Angle_Corr']:+.4f}",
                     "보정 R₀": f"{res['R0']:.4f}",
@@ -1682,7 +1926,7 @@ with tab2:
         # ---------------------------------------------------------
         # [수정 4] 배치(엑셀) 템플릿 + 파싱 + 계산에 Ct 반영
         # ---------------------------------------------------------
-        st.info("💡 엑셀 업로드 시 아래 양식을 다운로드하여 작성해주세요. (Ct 컬럼 추가됨)")
+        st.info("💡 엑셀 업로드 시 아래 양식을 다운로드하여 작성해주세요. (Ct 및 측정정책 컬럼 포함)")
 
         template_df = pd.DataFrame({
             "지점": ["S1-Deck", "S2-Deck"],
@@ -1690,6 +1934,7 @@ with tab2:
             "재령": [3000, 3000],
             "설계": [40, 40],
             "Ct": [1.00, 1.00],
+            "측정정책": ["정확히20", "정확히20"],
             "데이터": [
                 "58.4 57 61.8 61.2 60.6 58.9 59.9 58.9 58.2 57.8 61.5 60.1 64.1 57.9 59.3 56.8 57.1 58 58.4 58.0",
                 "32 33 35 34 32 33 35 34 32 33 35 34 32 33 35 34 32 33 35 34"
@@ -1701,7 +1946,7 @@ with tab2:
             st.download_button(
                 label="📥 입력 양식(엑셀) 다운로드",
                 data=template_excel,
-                file_name='반발경도_입력양식_Ct포함.xlsx',
+                file_name='반발경도_입력양식_측정정책_Ct포함.xlsx',
                 mime='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
             )
         except RuntimeError as e:
@@ -1726,6 +1971,7 @@ with tab2:
                             "재령": _safe_num(row.get("재령", 3000), 3000, int),
                             "설계": _safe_num(row.get("설계", 24.0), 24.0, float),
                             "Ct": _safe_num(row.get("Ct", 1.0), 1.0, float),
+                            "측정정책": str(row.get("측정정책", "정확히20")),
                             "데이터": str(row.get("데이터", ""))
                         })
                     except Exception as row_err:
@@ -1736,7 +1982,7 @@ with tab2:
             except Exception as e:
                 st.error(f"파일 파싱 실패: {e}")
 
-        df_batch = pd.DataFrame(init_data) if init_data else pd.DataFrame(columns=["선택", "지점", "각도", "재령", "설계", "Ct", "데이터"])
+        df_batch = pd.DataFrame(init_data) if init_data else pd.DataFrame(columns=["선택", "지점", "각도", "재령", "설계", "Ct", "측정정책", "데이터"])
         edited_df = st.data_editor(
             df_batch,
             column_config={
@@ -1745,6 +1991,15 @@ with tab2:
                 "재령": st.column_config.NumberColumn("재령", min_value=1, max_value=100000, default=3000),
                 "설계": st.column_config.NumberColumn("설계", min_value=0.1, max_value=200.0, default=24.0),
                 "Ct": st.column_config.NumberColumn("Ct", min_value=0.01, max_value=5.0, default=1.00, step=0.01),
+                "측정정책": st.column_config.SelectboxColumn(
+                    "측정정책",
+                    options=[
+                        REBOUND_POINT_POLICY_OPTIONS[REBOUND_POINT_POLICY_EXACT_20]["short_label"],
+                        REBOUND_POINT_POLICY_OPTIONS[REBOUND_POINT_POLICY_MIN_20]["short_label"],
+                    ],
+                    required=True,
+                    help="정확히20: 20개가 아니면 무효 / 20개이상: 20개 초과 입력 허용, 기각률 25% 이상 무효"
+                ),
             },
             use_container_width=True,
             hide_index=True,
@@ -1763,6 +2018,7 @@ with tab2:
                     age_v = row.get("재령", 3000)
                     fck_v = row.get("설계", 24.0)
                     ct_v = row.get("Ct", 1.0)
+                    policy_v = normalize_rebound_point_policy(row.get("측정정책", "정확히20"))
 
                     ok, res = calculate_strength(
                         rd_list,
@@ -1771,7 +2027,8 @@ with tab2:
                         design_fck=fck_v,
                         selected_formulas=None,      # 배치 모드는 자동 추천 로직
                         core_coeff=ct_v,
-                        require_20_points=True
+                        require_20_points=True,
+                        point_count_policy=policy_v
                     )
 
                     if ok:
@@ -1781,6 +2038,10 @@ with tab2:
                             "지점": row.get("지점", "P"),
                             "설계": result_fck,
                             "Ct": result_ct,
+                            "측정정책": res.get("Point_Count_Policy_Label", get_rebound_point_policy_label(policy_v)),
+                            "기각기준": res.get("Discard_Rule", ""),
+                            "측정점수": int(res.get("N", len(rd_list))),
+                            "유효점수": int(res.get("Effective_N", max(0, len(rd_list) - res.get("Discard", 0)))),
                             "공식선택방식": res.get("Formula_Mode", "자동추천"),
                             "적용공식": ", ".join(res.get("Applied_Formulas", [])),
                             "추정강도": round(res["Mean_Strength"], 2),
@@ -1801,6 +2062,10 @@ with tab2:
                             "지점": row.get("지점", "P"),
                             "설계": _float_or_nan(fck_v),
                             "Ct": _float_or_nan(ct_v),
+                            "측정정책": get_rebound_point_policy_label(policy_v),
+                            "기각기준": "",
+                            "측정점수": len(rd_list),
+                            "유효점수": np.nan,
                             "공식선택방식": "자동추천",
                             "적용공식": ", ".join(get_recommended_formulas(fck_v)),
                             "추정강도": np.nan,
@@ -1823,7 +2088,7 @@ with tab2:
                 final_df = pd.DataFrame(batch_res)
                 res_tab1, res_tab2 = st.tabs(["📋 요약", "🔍 세부 데이터"])
                 with res_tab1:
-                    cols = ["지점", "설계", "Ct", "공식선택방식", "적용공식", "추정강도", "강도비(%)"]
+                    cols = ["지점", "설계", "Ct", "측정정책", "측정점수", "유효점수", "기각수", "공식선택방식", "적용공식", "추정강도", "강도비(%)"]
                     cols = [c for c in cols if c in final_df.columns]
                     st.dataframe(final_df[cols], use_container_width=True, hide_index=True)
                 with res_tab2:
@@ -1838,7 +2103,7 @@ with tab2:
                         st.download_button(
                             label="📊 엑셀 다운로드",
                             data=excel_data,
-                            file_name=f"{p_name}_반발경도_평가결과_Ct포함.xlsx",
+                            file_name=f"{p_name}_반발경도_평가결과_측정정책_Ct포함.xlsx",
                             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                             type="primary",
                             use_container_width=True
