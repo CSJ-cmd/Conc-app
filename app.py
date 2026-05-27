@@ -6,6 +6,7 @@ import io
 import altair as alt
 import re
 import logging
+import hashlib
 from PIL import Image
 
 logger = logging.getLogger(__name__)
@@ -1056,36 +1057,137 @@ with tab2:
                 img_file = st.camera_input("측정 기록표를 촬영하세요")
 
             if img_file:
-                st.caption("이미지가 회전되어 보이면 아래 버튼으로 조정 후 [계산 실행]을 눌러주세요.")
+                st.caption("이미지가 회전되어 보이면 아래에서 회전값을 조정하세요. 회전값이 바뀌면 OCR을 다시 실행합니다.")
                 rot_val = st.radio("이미지 회전(반시계)", [0, 90, 180, 270], index=0, horizontal=True, key="img_rot")
 
             if img_file is not None:
-                # 새 업로드/회전/모드 변경 시 이전 OCR 결과 제거 (stale 방지)
-                try:
-                    upload_sig = (getattr(img_file, "name", ""), getattr(img_file, "size", 0), rot_val, ocr_mode, cam_mode)
-                except Exception:
-                    upload_sig = (str(img_file), rot_val, ocr_mode, cam_mode)
+                # -------------------------------------------------
+                # OCR 재실행 방지
+                # -------------------------------------------------
+                # Streamlit은 위젯 값이 바뀔 때마다 전체 스크립트를 다시 실행합니다.
+                # 이미지가 그대로인데 재령/설계강도/Ct/공식 선택만 바뀌어도
+                # OCR이 반복 실행되지 않도록 이미지 조합별 처리 여부를 저장합니다.
 
-                if st.session_state.get("ocr_upload_sig") != upload_sig:
+                file_bytes = None
+                file_hash = ""
+                file_size = getattr(img_file, "size", 0)
+
+                try:
+                    # name + size만으로는 같은 이름/같은 크기의 다른 이미지를 구분하기 어렵습니다.
+                    # 짧은 내용 해시를 signature에 포함해 stale OCR 결과 사용 위험을 줄입니다.
+                    file_bytes = img_file.getvalue()
+                    file_size = len(file_bytes)
+                    file_hash = hashlib.blake2b(file_bytes, digest_size=8).hexdigest()
+                except Exception:
+                    file_hash = ""
+
+                try:
+                    upload_sig = (
+                        getattr(img_file, "name", ""),
+                        file_size,
+                        file_hash,
+                        rot_val,
+                        ocr_mode,
+                        cam_mode,
+                    )
+                except Exception:
+                    upload_sig = (
+                        str(img_file),
+                        file_hash,
+                        rot_val,
+                        ocr_mode,
+                        cam_mode,
+                    )
+
+                sig_changed = st.session_state.get("ocr_upload_sig") != upload_sig
+
+                # 이미지/회전/OCR 모드가 바뀐 경우 기존 OCR 상태를 초기화합니다.
+                if sig_changed:
                     st.session_state["ocr_upload_sig"] = upload_sig
                     st.session_state.pop("ocr_result", None)
+                    st.session_state.pop("ocr_error", None)
+                    st.session_state.pop("ocr_processed_sig", None)
 
-                with st.spinner("이미지 처리 및 숫자 인식 중..."):
-                    pil_image = Image.open(img_file)
-                    if rot_val != 0:
-                        pil_image = pil_image.rotate(rot_val, expand=True)
+                rerun_ocr = st.button(
+                    "🔁 OCR 다시 실행",
+                    key="btn_rerun_ocr",
+                    use_container_width=True,
+                    help="이미지, 회전값, OCR 모드는 그대로 두고 숫자 인식만 다시 실행합니다."
+                )
 
-                    recognized_text = extract_numbers_from_image(pil_image, ocr_mode=ocr_mode)
+                # 이 이미지 조합에 대해 아직 OCR을 실행하지 않았거나,
+                # 사용자가 수동 재실행 버튼을 누른 경우에만 OCR을 실행합니다.
+                should_run_ocr = (
+                    rerun_ocr
+                    or st.session_state.get("ocr_processed_sig") != upload_sig
+                )
 
-                    if recognized_text:
-                        st.session_state['ocr_result'] = recognized_text
-                        ocr_vals = parse_readings_text(recognized_text)
+                if should_run_ocr:
+                    # 성공/실패 여부와 관계없이 '이 이미지 조합은 OCR 시도 완료'로 기록합니다.
+                    # 그래야 OCR 실패 이미지도 Streamlit 재실행 때마다 반복 처리되지 않습니다.
+                    st.session_state["ocr_processed_sig"] = upload_sig
+
+                    with st.spinner("이미지 처리 및 숫자 인식 중..."):
+                        recognized_text = ""
+
+                        try:
+                            if file_bytes is not None:
+                                image_source = io.BytesIO(file_bytes)
+                            else:
+                                try:
+                                    img_file.seek(0)
+                                except Exception:
+                                    pass
+                                image_source = img_file
+
+                            pil_image = Image.open(image_source)
+
+                            if rot_val != 0:
+                                pil_image = pil_image.rotate(rot_val, expand=True)
+
+                            recognized_text = extract_numbers_from_image(
+                                pil_image,
+                                ocr_mode=ocr_mode
+                            )
+
+                        except Exception as e:
+                            logger.exception("OCR 실행 중 오류 발생: %s", e)
+                            recognized_text = ""
+                            st.session_state["ocr_error"] = (
+                                "OCR 처리 중 오류가 발생했습니다. "
+                                "이미지를 다시 업로드하거나 직접 입력해주세요."
+                            )
+
+                        if recognized_text:
+                            st.session_state["ocr_result"] = recognized_text
+                            st.session_state.pop("ocr_error", None)
+                        else:
+                            st.session_state.pop("ocr_result", None)
+                            if "ocr_error" not in st.session_state:
+                                st.session_state["ocr_error"] = (
+                                    "숫자를 인식하지 못했습니다. 직접 입력해주세요."
+                                )
+
+                # -------------------------------------------------
+                # OCR 결과 표시
+                # -------------------------------------------------
+                # OCR을 방금 실행했든, 이전 결과를 재사용하든,
+                # 화면 표시는 이곳에서 한 번만 처리합니다.
+                recognized_text = st.session_state.get("ocr_result", "")
+
+                if recognized_text:
+                    ocr_vals = parse_readings_text(recognized_text)
+
+                    if should_run_ocr:
                         st.success(f"인식 성공 ({len(ocr_vals)}개): {recognized_text}")
-                        if len(ocr_vals) != 20:
-                            st.warning("자동 인식값이 20개가 아닙니다. 아래 입력창에서 확인/수정 후 계산하세요.")
                     else:
-                        st.session_state.pop("ocr_result", None)
-                        st.warning("숫자를 인식하지 못했습니다. 직접 입력해주세요.")
+                        st.info(f"저장된 OCR 결과 사용 중 ({len(ocr_vals)}개): {recognized_text}")
+
+                    if len(ocr_vals) != 20:
+                        st.warning("자동 인식값이 20개가 아닙니다. 아래 입력창에서 확인/수정 후 계산하세요.")
+
+                elif st.session_state.get("ocr_error"):
+                    st.warning(st.session_state["ocr_error"])
 
             # ---- 입력 파라미터: 모바일은 단일 컬럼, 데스크톱은 4열 ----
             if mobile_client:
