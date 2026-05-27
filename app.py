@@ -331,18 +331,98 @@ def _format_readings_for_text(values):
     return " ".join(formatted)
 
 
+def _normalize_manual_reading_text(raw_text):
+    """
+    사람이 직접 입력한 측정값 문자열을 파싱하기 쉽게 정리합니다.
+
+    핵심 원칙:
+    - 수동 입력에서 쉼표(,)는 기본적으로 숫자 구분자로 봅니다.
+      예: "54,56,55" -> "54 56 55"
+    - 소수점은 점(.) 사용을 권장합니다.
+      예: "54.5 56.0 55.5"
+    - OCR 오인식 보정(O->0, l->1 등)은 여기서 하지 않습니다.
+      그런 보정은 _normalize_ocr_token()에서만 처리합니다.
+    """
+    if raw_text is None:
+        return ""
+
+    text = str(raw_text)
+
+    # 유니코드 대시 문자를 일반 하이픈으로 통일합니다.
+    text = text.replace("−", "-").replace("–", "-").replace("—", "-")
+
+    # 천 단위 콤마는 제거합니다.
+    # 예: "1,234" -> "1234"
+    text = re.sub(r'(?<=\d),(?=\d{3}(?:\D|$))', '', text)
+
+    # 숫자 사이 쉼표는 구분자로 처리합니다.
+    # 예: "54,56,55" -> "54 56 55"
+    text = re.sub(r'(?<=\d),(?=\d)', ' ', text)
+
+    # 세미콜론, 탭, 줄바꿈, 슬래시 등도 구분자로 처리합니다.
+    text = re.sub(r'[;\t\r\n/]+', ' ', text)
+
+    # 괄호류는 공백 처리합니다.
+    text = re.sub(r'[\[\]\(\)\{\}]', ' ', text)
+
+    return text.strip()
+
+
 def parse_readings_text(raw_text):
-    """텍스트 입력에서 숫자만 안전하게 파싱"""
+    """
+    수동 입력/엑셀 입력/텍스트 입력에서 숫자 목록을 파싱합니다.
+
+    주의:
+    - 이 함수는 사람이 입력한 값을 대상으로 합니다.
+    - OCR 원문 보정은 _normalize_ocr_token()에서 별도로 처리합니다.
+    - 소수점은 '.' 사용을 권장합니다.
+    """
+    text = _normalize_manual_reading_text(raw_text)
+    if not text:
+        return []
+
+    # 정수, 소수, .5 형태까지 허용합니다.
+    tokens = re.findall(r'[-+]?(?:\d+(?:\.\d*)?|\.\d+)', text)
+
+    vals = []
+    for token in tokens:
+        try:
+            value = float(token)
+        except (TypeError, ValueError):
+            continue
+
+        if np.isfinite(value):
+            vals.append(value)
+
+    return vals
+
+
+def parse_ocr_readings_text(raw_text):
+    """
+    OCR 원문에서 숫자 목록을 파싱할 때 사용하는 함수입니다.
+
+    현재 extract_numbers_from_image()는 내부에서 OCR 후보를 숫자로 정리한 뒤
+    _format_readings_for_text()로 공백 구분 문자열을 반환하므로,
+    일반적인 화면 흐름에서는 parse_readings_text()만으로도 충분합니다.
+
+    다만 향후 OCR 원문을 직접 파싱할 일이 생길 수 있으므로 OCR 전용 함수를 분리해 둡니다.
+    """
     if raw_text is None:
         return []
+
     normalized = _normalize_ocr_token(str(raw_text))
-    tokens = re.findall(r'[-+]?\d+(?:\.\d+)?', normalized)
+    tokens = re.findall(r'[-+]?(?:\d+(?:\.\d*)?|\.\d+)', normalized)
+
     vals = []
-    for t in tokens:
+    for token in tokens:
         try:
-            vals.append(float(t))
-        except Exception:
+            value = float(token)
+        except (TypeError, ValueError):
             continue
+
+        if np.isfinite(value):
+            vals.append(value)
+
     return vals
 
 
@@ -772,12 +852,34 @@ def to_excel(df):
 def run_validation_tests():
     """
     테스트 케이스:
+    - TC0: 수동/엑셀 입력 파서가 공백, 쉼표, 줄바꿈, 소수 입력을 안전하게 처리하는지 확인
     - TC1: 첨부 엑셀(1. 원본 / 2. 정리)와 수치가 일치하는 대표 케이스(상부구조 S1, 바닥판, 90°, 3000일)
     - TC2: 20점 중 2개 outlier(±20% 밖) -> 기각 2개, 무효 아님
     - TC3: 20점 중 5개 outlier -> 시험 무효 처리 확인
     - TC4: Ct=1.10 적용 시 강도들이 1.10배 되는지 확인
     """
     results = []
+
+    # ----- TC0: 입력 파서 검증 -----
+    parser_cases = [
+        ("54 56 55", [54.0, 56.0, 55.0]),
+        ("54,56,55", [54.0, 56.0, 55.0]),
+        ("54, 56, 55", [54.0, 56.0, 55.0]),
+        ("54.5 56.0 55.5", [54.5, 56.0, 55.5]),
+        ("54\n56\n55", [54.0, 56.0, 55.0]),
+        ("[54, 56, 55]", [54.0, 56.0, 55.0]),
+    ]
+
+    parser_details = {}
+    parser_pass = True
+
+    for raw, expected in parser_cases:
+        actual = parse_readings_text(raw)
+        parser_details[raw] = actual
+        if actual != expected:
+            parser_pass = False
+
+    results.append(("TC0(입력 파서)", parser_pass, parser_details))
 
     # ----- TC1: 엑셀 일치 케이스 -----
     readings_tc1 = [
@@ -1021,7 +1123,12 @@ with tab2:
             if 'ocr_result' in st.session_state:
                 default_txt = st.session_state['ocr_result']
 
-            txt = st.text_area("측정값 (자동 인식 결과 수정 가능)", value=default_txt, height=120 if mobile_client else 80)
+            txt = st.text_area(
+                "측정값 (자동 인식 결과 수정 가능)",
+                value=default_txt,
+                height=120 if mobile_client else 80,
+                help="여러 값은 공백, 줄바꿈, 쉼표로 구분할 수 있습니다. 소수점은 58.4처럼 점(.)을 사용하세요."
+            )
 
             # OCR 결과를 20칸 편집 UI로 제공 (txt 기준 동기화)
             preview_vals = parse_readings_text(txt)
@@ -1754,7 +1861,13 @@ with tab4:
         session_data_str = " ".join([f"{x:.1f}" for x in st.session_state['rebound_data']])
         default_stat_txt = session_data_str if session_data_str else "24.5 26.2 23.1 21.8 25.5 27.0"
 
-        raw_txt = st.text_area("강도 데이터 목록", default_stat_txt, height=68, key="stat_raw")
+        raw_txt = st.text_area(
+            "강도 데이터 목록",
+            default_stat_txt,
+            height=68,
+            key="stat_raw",
+            help="여러 값은 공백, 줄바꿈, 쉼표로 구분할 수 있습니다. 소수점은 24.5처럼 점(.)을 사용하세요."
+        )
         parsed = parse_readings_text(raw_txt)
 
         if parsed and len(parsed) >= 2:
