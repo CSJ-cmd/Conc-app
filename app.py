@@ -195,6 +195,15 @@ def is_mobile_client():
 # 2. 핵심 로직 및 함수 정의
 # =========================================================
 
+# 반발경도 계산 입력 검증 기준
+# - UI에서 제한하더라도 엑셀/텍스트/직접 호출을 통해 비정상 값이 들어올 수 있으므로
+#   최종 계산 함수에서 한 번 더 검증합니다.
+# - 20개 정확히 강제 여부는 별도 정책 이슈이므로, 여기서는 기존처럼 최소 20개 기준을 유지합니다.
+ALLOWED_REBOUND_ANGLES = {-90, -45, 0, 45, 90}
+REBOUND_READING_MIN = 10.0
+REBOUND_READING_MAX = 100.0
+REBOUND_FORMULA_NAMES = {"일본재료", "일본건축", "과기부", "권영웅", "KALIS"}
+
 @st.cache_resource
 def load_ocr_model():
     import easyocr
@@ -434,6 +443,142 @@ def _safe_num(v, default, cast=float):
     return cast(n)
 
 
+def _float_or_nan(v):
+    """표시/저장용 숫자 변환. 변환 실패 또는 NaN/inf는 np.nan으로 반환합니다."""
+    try:
+        n = float(v)
+    except (TypeError, ValueError):
+        return np.nan
+    return n if np.isfinite(n) else np.nan
+
+
+def _coerce_finite_float(value, field_name):
+    """계산에 쓰는 입력값을 유한한 float로 변환합니다."""
+    if isinstance(value, (bool, np.bool_)):
+        return False, f"{field_name}은(는) True/False가 아니라 숫자로 입력해야 합니다."
+
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return False, f"{field_name}은(는) 숫자여야 합니다. 입력값: {value!r}"
+
+    if not np.isfinite(number):
+        return False, f"{field_name}에 NaN 또는 무한대 값이 포함되어 있습니다."
+
+    return True, number
+
+
+def validate_rebound_inputs(
+    readings,
+    angle,
+    days,
+    design_fck=24.0,
+    selected_formulas=None,
+    core_coeff=1.0,
+):
+    """
+    반발경도 계산 전 입력값을 검증하고 계산 가능한 형태로 정규화합니다.
+
+    검증 대상:
+    - 측정값 리스트 여부, 숫자 여부, NaN/inf 여부
+    - 반발경도 허용 범위(기본 10~100)
+    - 타격각도 허용값(-90, -45, 0, 45, 90)
+    - 재령, 설계강도, Ct가 0보다 큰 유한수인지 여부
+    - 공식 선택값이 알려진 공식명인지 여부
+    """
+    if readings is None:
+        return False, "데이터 없음: 측정값 목록이 비어 있습니다."
+
+    if isinstance(readings, str):
+        return False, "측정값은 숫자 리스트여야 합니다. 텍스트 입력은 parse_readings_text()로 먼저 변환하세요."
+
+    try:
+        raw_readings = list(readings)
+    except TypeError:
+        return False, "측정값은 반복 가능한 숫자 목록이어야 합니다."
+
+    if len(raw_readings) == 0:
+        return False, "데이터 없음: 측정값 목록이 비어 있습니다."
+
+    cleaned_readings = []
+    for idx, value in enumerate(raw_readings, start=1):
+        ok, number = _coerce_finite_float(value, f"측정값 {idx}번")
+        if not ok:
+            return False, number
+
+        if not (REBOUND_READING_MIN <= number <= REBOUND_READING_MAX):
+            return (
+                False,
+                f"측정값 {idx}번({number:g})이 허용 범위 "
+                f"{REBOUND_READING_MIN:g}~{REBOUND_READING_MAX:g}를 벗어났습니다."
+            )
+
+        cleaned_readings.append(number)
+
+    ok, angle_num = _coerce_finite_float(angle, "타격각도")
+    if not ok:
+        return False, angle_num
+    if not float(angle_num).is_integer():
+        return False, f"타격각도는 정수 각도여야 합니다. 입력값: {angle_num:g}"
+    angle_int = int(angle_num)
+    if angle_int not in ALLOWED_REBOUND_ANGLES:
+        allowed = ", ".join(f"{a}°" for a in sorted(ALLOWED_REBOUND_ANGLES))
+        return False, f"허용되지 않는 타격각도입니다: {angle_int}°. 허용값: {allowed}"
+
+    ok, days_num = _coerce_finite_float(days, "재령")
+    if not ok:
+        return False, days_num
+    if days_num <= 0:
+        return False, "재령은 0보다 큰 값이어야 합니다."
+
+    ok, fck_num = _coerce_finite_float(design_fck, "설계강도")
+    if not ok:
+        return False, fck_num
+    if fck_num <= 0:
+        return False, "설계강도는 0보다 큰 값이어야 합니다."
+
+    ok, ct_num = _coerce_finite_float(core_coeff, "코어 보정계수(Ct)")
+    if not ok:
+        return False, ct_num
+    if ct_num <= 0:
+        return False, "코어 보정계수(Ct)는 0보다 커야 합니다."
+
+    if selected_formulas is None:
+        formulas = []
+    elif isinstance(selected_formulas, str):
+        formulas = [selected_formulas]
+    else:
+        try:
+            formulas = list(selected_formulas)
+        except TypeError:
+            return False, "평균 산정 공식 선택값은 리스트 형태여야 합니다."
+
+    normalized_formulas = []
+    invalid_formulas = []
+    for formula in formulas:
+        name = str(formula).strip()
+        if not name:
+            continue
+        if name not in REBOUND_FORMULA_NAMES:
+            invalid_formulas.append(name)
+            continue
+        if name not in normalized_formulas:
+            normalized_formulas.append(name)
+
+    if invalid_formulas:
+        allowed = ", ".join(sorted(REBOUND_FORMULA_NAMES))
+        return False, f"알 수 없는 평균 산정 공식이 포함되어 있습니다: {invalid_formulas}. 허용값: {allowed}"
+
+    return True, {
+        "readings": cleaned_readings,
+        "angle": angle_int,
+        "days": days_num,
+        "design_fck": fck_num,
+        "core_coeff": ct_num,
+        "selected_formulas": normalized_formulas,
+    }
+
+
 def extract_numbers_from_image(image_input, ocr_mode="정밀"):
     """
     OCR 전처리 강화 + 전표형 측정지에서 20개 측정값 자동 추출
@@ -598,14 +743,24 @@ def calculate_strength(
     core_coeff=1.0,          # Ct
     require_20_points=True   # 최소 20점 강제
 ):
-    if not readings:
-        return False, "데이터 없음"
+    # 계산 전 최종 방어선: 텍스트/엑셀/UI 어디에서 들어온 값이든 여기서 검증합니다.
+    valid_input, validated = validate_rebound_inputs(
+        readings=readings,
+        angle=angle,
+        days=days,
+        design_fck=design_fck,
+        selected_formulas=selected_formulas,
+        core_coeff=core_coeff,
+    )
+    if not valid_input:
+        return False, validated
 
-    # 숫자화/정리
-    try:
-        rd = [float(x) for x in readings]
-    except (TypeError, ValueError):
-        return False, "측정값에 숫자가 아닌 값이 포함되어 있습니다."
+    rd = validated["readings"]
+    angle = validated["angle"]
+    days = validated["days"]
+    design_fck = validated["design_fck"]
+    selected_formulas = validated["selected_formulas"]
+    ct = validated["core_coeff"]
 
     n = len(rd)
 
@@ -640,14 +795,6 @@ def calculate_strength(
     # 재령 계수
     age_c = float(get_age_coefficient(days))
 
-    # Ct
-    try:
-        ct = float(core_coeff)
-    except (TypeError, ValueError):
-        ct = 1.0
-    if ct <= 0:
-        return False, "코어 보정계수(Ct)는 0보다 커야 합니다."
-
     # 강도식 (원값)
     f_jsms = max(0.0, (1.27 * R0 - 18.0) * age_c)                # 일본재료학회
     f_aij = max(0.0, (7.3 * R0 + 100.0) * 0.098 * age_c)         # 일본건축학회
@@ -675,7 +822,10 @@ def calculate_strength(
                      if design_fck < 40
                      else [all_formulas["과기부"], all_formulas["권영웅"], all_formulas["KALIS"]])
 
-    s_mean = float(np.mean(target_fs)) if target_fs else 0.0
+    if not target_fs:
+        return False, "평균 산정에 사용할 유효한 공식이 없습니다."
+
+    s_mean = float(np.mean(target_fs))
 
     return True, {
         "N": n,
@@ -685,10 +835,14 @@ def calculate_strength(
         "R0": R0,
         "Age_Coeff": age_c,
         "Core_Coeff": ct,
+        "Design_Fck": design_fck,
+        "Angle": angle,
+        "Days": days,
         "Discard": len(excluded),
         "Excluded": excluded,
         "Formulas": all_formulas,
         "Formulas_Raw": all_formulas_raw,
+        "Selected_Formulas": selected_formulas,
         "Mean_Strength": s_mean
     }
 
@@ -858,6 +1012,7 @@ def run_validation_tests():
     - TC2: 20점 중 2개 outlier(±20% 밖) -> 기각 2개, 무효 아님
     - TC3: 20점 중 5개 outlier -> 시험 무효 처리 확인
     - TC4: Ct=1.10 적용 시 강도들이 1.10배 되는지 확인
+    - TC5: NaN/inf, 허용 범위 밖 측정값, 잘못된 각도/재령/설계강도/Ct/공식명을 차단하는지 확인
     """
     results = []
 
@@ -935,6 +1090,21 @@ def run_validation_tests():
     ok4b, res4b = calculate_strength(readings_tc1, angle=90, days=3000, design_fck=40, core_coeff=1.10, require_20_points=True)
     tc4_pass = ok4a and ok4b and close(res4b["Formulas"]["과기부"], res4a["Formulas"]["과기부"] * 1.10, 1e-6)
     results.append(("TC4(Ct 배율)", tc4_pass, {"MST@1.0": res4a["Formulas"]["과기부"], "MST@1.10": res4b["Formulas"]["과기부"]}))
+
+    # ----- TC5: 입력값 검증 -----
+    validation_cases = {
+        "NaN 측정값 차단": calculate_strength([50] * 19 + [np.nan], angle=0, days=3000, design_fck=24, core_coeff=1.0),
+        "inf 측정값 차단": calculate_strength([50] * 19 + [np.inf], angle=0, days=3000, design_fck=24, core_coeff=1.0),
+        "허용 범위 밖 측정값 차단": calculate_strength([50] * 19 + [5], angle=0, days=3000, design_fck=24, core_coeff=1.0),
+        "잘못된 각도 차단": calculate_strength([50] * 20, angle=30, days=3000, design_fck=24, core_coeff=1.0),
+        "재령 0 차단": calculate_strength([50] * 20, angle=0, days=0, design_fck=24, core_coeff=1.0),
+        "설계강도 0 차단": calculate_strength([50] * 20, angle=0, days=3000, design_fck=0, core_coeff=1.0),
+        "Ct 0 차단": calculate_strength([50] * 20, angle=0, days=3000, design_fck=24, core_coeff=0),
+        "알 수 없는 공식 차단": calculate_strength([50] * 20, angle=0, days=3000, design_fck=24, selected_formulas=["없는공식"], core_coeff=1.0),
+    }
+    tc5_pass = all(not ok for ok, _ in validation_cases.values())
+    validation_details = {name: detail for name, (ok, detail) in validation_cases.items()}
+    results.append(("TC5(입력값 검증)", tc5_pass, validation_details))
 
     return results
 
@@ -1244,7 +1414,7 @@ with tab2:
                 grid_df,
                 column_config={
                     "No": st.column_config.NumberColumn("No", disabled=True),
-                    "측정값": st.column_config.NumberColumn("측정값", min_value=0.0, max_value=100.0, step=0.1),
+                    "측정값": st.column_config.NumberColumn("측정값", min_value=REBOUND_READING_MIN, max_value=REBOUND_READING_MAX, step=0.1),
                 },
                 hide_index=True,
                 use_container_width=True,
@@ -1463,9 +1633,9 @@ with tab2:
             column_config={
                 "선택": st.column_config.CheckboxColumn("선택", default=True),
                 "각도": st.column_config.SelectboxColumn("각도", options=[90, 45, 0, -45, -90], required=True),
-                "재령": st.column_config.NumberColumn("재령", default=3000),
-                "설계": st.column_config.NumberColumn("설계", default=24),
-                "Ct": st.column_config.NumberColumn("Ct", default=1.00),
+                "재령": st.column_config.NumberColumn("재령", min_value=1, max_value=100000, default=3000),
+                "설계": st.column_config.NumberColumn("설계", min_value=0.1, max_value=200.0, default=24.0),
+                "Ct": st.column_config.NumberColumn("Ct", min_value=0.01, max_value=5.0, default=1.00, step=0.01),
             },
             use_container_width=True,
             hide_index=True,
@@ -1496,12 +1666,14 @@ with tab2:
                     )
 
                     if ok:
+                        result_fck = float(res.get("Design_Fck", fck_v))
+                        result_ct = float(res.get("Core_Coeff", ct_v))
                         data_entry = {
                             "지점": row.get("지점", "P"),
-                            "설계": float(fck_v),
-                            "Ct": float(ct_v),
+                            "설계": result_fck,
+                            "Ct": result_ct,
                             "추정강도": round(res["Mean_Strength"], 2),
-                            "강도비(%)": round((res["Mean_Strength"] / float(fck_v)) * 100, 1) if float(fck_v) != 0 else np.nan,
+                            "강도비(%)": round((res["Mean_Strength"] / result_fck) * 100, 1) if result_fck != 0 else np.nan,
                             "유효평균R": round(res["R_avg"], 3),
                             "보정ΔR": round(res["Angle_Corr"], 6),
                             "보정R0": round(res["R0"], 6),
@@ -1516,8 +1688,8 @@ with tab2:
                     else:
                         batch_res.append({
                             "지점": row.get("지점", "P"),
-                            "설계": float(fck_v),
-                            "Ct": float(ct_v),
+                            "설계": _float_or_nan(fck_v),
+                            "Ct": _float_or_nan(ct_v),
                             "추정강도": np.nan,
                             "강도비(%)": np.nan,
                             "유효평균R": np.nan,
