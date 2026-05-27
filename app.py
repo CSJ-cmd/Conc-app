@@ -1367,6 +1367,50 @@ def run_validation_tests():
 
 
 # =========================================================
+# 2-2) pytest 자동 테스트 분리용 core 모듈 연동
+# =========================================================
+# v6부터 반발경도 계산/검증/파서 로직은 structural_safety_core_v6.py에서도
+# 동일하게 제공됩니다. 앱 파일만 단독 실행하는 기존 사용성은 유지하되,
+# core 모듈이 같은 폴더에 있으면 아래 순수 함수들을 core 버전으로 연결합니다.
+# 이렇게 하면 pytest가 검증하는 함수와 앱에서 실제 사용하는 함수가 같아집니다.
+try:
+    from structural_safety_core_v6 import (  # type: ignore
+        ALLOWED_REBOUND_ANGLES,
+        REBOUND_READING_MIN,
+        REBOUND_READING_MAX,
+        REBOUND_FORMULA_OPTIONS,
+        REBOUND_FORMULA_NAMES,
+        REBOUND_FORMULA_RECOMMEND_THRESHOLD,
+        REBOUND_POINT_POLICY_EXACT_20,
+        REBOUND_POINT_POLICY_MIN_20,
+        REBOUND_POINT_POLICY_NO_MINIMUM,
+        DEFAULT_REBOUND_POINT_POLICY,
+        REBOUND_DISCARD_COUNT_LIMIT_20,
+        REBOUND_DISCARD_RATIO_LIMIT,
+        REBOUND_POINT_POLICY_OPTIONS,
+        REBOUND_POINT_POLICY_LABEL_TO_KEY,
+        normalize_rebound_point_policy,
+        get_rebound_point_policy_label,
+        get_rebound_point_policy_description,
+        get_rebound_point_policy_short_label,
+        get_discard_limit_for_policy,
+        get_recommended_formulas,
+        get_recommended_formula_description,
+        _normalize_ocr_token,
+        _normalize_manual_reading_text,
+        parse_readings_text,
+        parse_ocr_readings_text,
+        validate_rebound_inputs,
+        get_angle_correction,
+        get_age_coefficient,
+        calculate_strength,
+        run_validation_tests,
+    )
+except ImportError as e:
+    logger.warning("structural_safety_core_v6.py를 불러오지 못해 앱 내장 계산 함수를 사용합니다: %s", e)
+
+
+# =========================================================
 # 3. 메인 UI 구성
 # =========================================================
 
@@ -1444,7 +1488,7 @@ with tab1:
         """)
 
     with st.expander("🧪 검증용 테스트 케이스 실행(개발/검증)", expanded=False):
-        st.caption("TC1은 첨부 엑셀과 동일한 입력(20점)으로 계산했을 때 Ravg, ΔR, Ro, 강도식 값이 일치하는지 확인합니다. TC7은 측정점수 정책을 검증합니다.")
+        st.caption("앱 내부 버튼으로 TC0~TC7을 확인할 수 있고, v6부터는 같은 검증을 pytest 명령어로도 자동 실행할 수 있습니다.")
         if st.button("테스트 실행", type="primary"):
             test_results = run_validation_tests()
             for name, passed, detail in test_results:
