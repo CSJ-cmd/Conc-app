@@ -202,7 +202,45 @@ def is_mobile_client():
 ALLOWED_REBOUND_ANGLES = {-90, -45, 0, 45, 90}
 REBOUND_READING_MIN = 10.0
 REBOUND_READING_MAX = 100.0
-REBOUND_FORMULA_NAMES = {"일본재료", "일본건축", "과기부", "권영웅", "KALIS"}
+REBOUND_FORMULA_OPTIONS = ["일본재료", "일본건축", "과기부", "권영웅", "KALIS"]
+REBOUND_FORMULA_NAMES = set(REBOUND_FORMULA_OPTIONS)
+REBOUND_FORMULA_RECOMMEND_THRESHOLD = 40.0
+
+
+def get_recommended_formulas(design_fck):
+    """
+    설계강도 기준 평균 산정 공식 자동추천.
+
+    - 40MPa 미만: 일반강도 콘크리트로 보고 일본건축/일본재료 적용
+    - 40MPa 이상: 고강도 영역까지 고려하여 과기부/권영웅/KALIS 적용
+    """
+    try:
+        fck = float(design_fck)
+    except (TypeError, ValueError):
+        fck = 24.0
+
+    if not np.isfinite(fck):
+        fck = 24.0
+
+    if fck < REBOUND_FORMULA_RECOMMEND_THRESHOLD:
+        return ["일본건축", "일본재료"]
+    return ["과기부", "권영웅", "KALIS"]
+
+
+def get_recommended_formula_description(design_fck):
+    """UI 표시용 자동추천 설명 문구를 반환합니다."""
+    formulas = get_recommended_formulas(design_fck)
+    try:
+        fck = float(design_fck)
+    except (TypeError, ValueError):
+        fck = 24.0
+
+    range_label = (
+        f"{REBOUND_FORMULA_RECOMMEND_THRESHOLD:g}MPa 미만 일반강도 기준"
+        if fck < REBOUND_FORMULA_RECOMMEND_THRESHOLD
+        else f"{REBOUND_FORMULA_RECOMMEND_THRESHOLD:g}MPa 이상 고강도 기준"
+    )
+    return f"{range_label}: {', '.join(formulas)}"
 
 @st.cache_resource
 def load_ocr_model():
@@ -543,31 +581,36 @@ def validate_rebound_inputs(
     if ct_num <= 0:
         return False, "코어 보정계수(Ct)는 0보다 커야 합니다."
 
+    # selected_formulas의 의미를 명확히 분리합니다.
+    # - None: 설계강도 기준 자동추천
+    # - list/tuple/set 등: 사용자가 직접 선택한 공식 목록
+    # - 빈 리스트: 수동선택 모드에서 아무 공식도 고르지 않은 상태로 간주
     if selected_formulas is None:
-        formulas = []
-    elif isinstance(selected_formulas, str):
-        formulas = [selected_formulas]
+        normalized_formulas = None
     else:
-        try:
-            formulas = list(selected_formulas)
-        except TypeError:
-            return False, "평균 산정 공식 선택값은 리스트 형태여야 합니다."
+        if isinstance(selected_formulas, str):
+            formulas = [selected_formulas]
+        else:
+            try:
+                formulas = list(selected_formulas)
+            except TypeError:
+                return False, "평균 산정 공식 선택값은 리스트 형태여야 합니다."
 
-    normalized_formulas = []
-    invalid_formulas = []
-    for formula in formulas:
-        name = str(formula).strip()
-        if not name:
-            continue
-        if name not in REBOUND_FORMULA_NAMES:
-            invalid_formulas.append(name)
-            continue
-        if name not in normalized_formulas:
-            normalized_formulas.append(name)
+        normalized_formulas = []
+        invalid_formulas = []
+        for formula in formulas:
+            name = str(formula).strip()
+            if not name:
+                continue
+            if name not in REBOUND_FORMULA_NAMES:
+                invalid_formulas.append(name)
+                continue
+            if name not in normalized_formulas:
+                normalized_formulas.append(name)
 
-    if invalid_formulas:
-        allowed = ", ".join(sorted(REBOUND_FORMULA_NAMES))
-        return False, f"알 수 없는 평균 산정 공식이 포함되어 있습니다: {invalid_formulas}. 허용값: {allowed}"
+        if invalid_formulas:
+            allowed = ", ".join(REBOUND_FORMULA_OPTIONS)
+            return False, f"알 수 없는 평균 산정 공식이 포함되어 있습니다: {invalid_formulas}. 허용값: {allowed}"
 
     return True, {
         "readings": cleaned_readings,
@@ -814,13 +857,18 @@ def calculate_strength(
     all_formulas = {k: v * ct for k, v in all_formulas_raw.items()}
 
     # 평균 산정 공식 선택
-    if selected_formulas:
-        target_fs = [all_formulas[k] for k in selected_formulas if k in all_formulas]
+    # selected_formulas=None이면 자동추천, []이면 수동선택 모드에서 미선택으로 처리합니다.
+    recommended_formulas = get_recommended_formulas(design_fck)
+    if selected_formulas is None:
+        formula_mode = "자동추천"
+        applied_formulas = recommended_formulas
     else:
-        # 설계강도 기준 자동추천 로직
-        target_fs = ([all_formulas["일본건축"], all_formulas["일본재료"]]
-                     if design_fck < 40
-                     else [all_formulas["과기부"], all_formulas["권영웅"], all_formulas["KALIS"]])
+        formula_mode = "수동선택"
+        applied_formulas = list(selected_formulas)
+        if not applied_formulas:
+            return False, "수동 공식 선택 모드에서는 평균 산정에 사용할 공식을 1개 이상 선택하세요."
+
+    target_fs = [all_formulas[k] for k in applied_formulas if k in all_formulas]
 
     if not target_fs:
         return False, "평균 산정에 사용할 유효한 공식이 없습니다."
@@ -842,7 +890,12 @@ def calculate_strength(
         "Excluded": excluded,
         "Formulas": all_formulas,
         "Formulas_Raw": all_formulas_raw,
+        "Recommended_Formulas": recommended_formulas,
         "Selected_Formulas": selected_formulas,
+        "Applied_Formulas": applied_formulas,
+        "Formula_Mode": formula_mode,
+        "Formula_Selection_Mode": "수동 선택" if formula_mode == "수동선택" else "자동추천",
+        "Formula_Recommendation_Basis": get_recommended_formula_description(design_fck),
         "Mean_Strength": s_mean
     }
 
@@ -1013,6 +1066,7 @@ def run_validation_tests():
     - TC3: 20점 중 5개 outlier -> 시험 무효 처리 확인
     - TC4: Ct=1.10 적용 시 강도들이 1.10배 되는지 확인
     - TC5: NaN/inf, 허용 범위 밖 측정값, 잘못된 각도/재령/설계강도/Ct/공식명을 차단하는지 확인
+    - TC6: 공식 자동추천/수동선택 모드가 의도대로 분리되는지 확인
     """
     results = []
 
@@ -1106,6 +1160,26 @@ def run_validation_tests():
     validation_details = {name: detail for name, (ok, detail) in validation_cases.items()}
     results.append(("TC5(입력값 검증)", tc5_pass, validation_details))
 
+
+    # ----- TC6: 공식 자동추천/수동선택 분리 검증 -----
+    ok6a, res6a = calculate_strength([50] * 20, angle=0, days=3000, design_fck=24, selected_formulas=None, core_coeff=1.0)
+    ok6b, res6b = calculate_strength([50] * 20, angle=0, days=3000, design_fck=40, selected_formulas=None, core_coeff=1.0)
+    ok6c, res6c = calculate_strength([50] * 20, angle=0, days=3000, design_fck=24, selected_formulas=["KALIS"], core_coeff=1.0)
+    ok6d, res6d = calculate_strength([50] * 20, angle=0, days=3000, design_fck=24, selected_formulas=[], core_coeff=1.0)
+
+    tc6_pass = (
+        ok6a and res6a.get("Formula_Mode") == "자동추천" and res6a.get("Applied_Formulas") == ["일본건축", "일본재료"] and
+        ok6b and res6b.get("Formula_Mode") == "자동추천" and res6b.get("Applied_Formulas") == ["과기부", "권영웅", "KALIS"] and
+        ok6c and res6c.get("Formula_Mode") == "수동선택" and res6c.get("Applied_Formulas") == ["KALIS"] and
+        (not ok6d) and "1개 이상" in str(res6d)
+    )
+    results.append(("TC6(공식 선택 UX)", tc6_pass, {
+        "24MPa 자동추천": res6a.get("Applied_Formulas") if ok6a else res6a,
+        "40MPa 자동추천": res6b.get("Applied_Formulas") if ok6b else res6b,
+        "수동선택 KALIS": res6c.get("Applied_Formulas") if ok6c else res6c,
+        "수동 미선택": res6d,
+    }))
+
     return results
 
 
@@ -1130,7 +1204,8 @@ with tab1:
     st.subheader("💡 프로그램 사용 가이드")
     st.info("""
     **1. 반발경도 산정 시 설계기준강도를 입력해주세요.**
-    * 설계기준강도를 바탕으로 압축강도 추정에 필요한 공식 적용 로직이 자동으로 변경됩니다.
+    * 설계기준강도 기준으로 평균 산정 공식이 자동추천됩니다.
+    * 필요 시 [공식 직접 선택] 모드로 책임기술자가 평균 산정 공식을 수동 지정할 수 있습니다.
 
     **2. 타격방향 보정 값을 매뉴얼을 참고해서 상향 타격인지 하향타격인지를 구분해서 선택해주세요.**
 
@@ -1387,9 +1462,32 @@ with tab2:
                     ct = st.number_input("코어 보정계수 Ct", 0.10, 2.00, 1.00, step=0.01)
 
             # 공식 선택 옵션
-            formula_opts = ["일본재료", "일본건축", "과기부", "권영웅", "KALIS"]
-            default_sels = ["일본건축", "일본재료"] if fck < 40 else ["과기부", "권영웅", "KALIS"]
-            selected_methods = st.multiselect("평균 산정 적용 공식 (미선택 시 설계강도 기준 자동추천)", formula_opts, default=default_sels)
+            formula_opts = REBOUND_FORMULA_OPTIONS
+            recommended_methods = get_recommended_formulas(fck)
+            formula_mode_label = st.radio(
+                "평균 산정 공식 선택 방식",
+                ["설계강도 기준 자동추천", "공식 직접 선택"],
+                horizontal=not mobile_client,
+                help=(
+                    "자동추천은 설계강도 기준으로 평균 산정 공식을 자동 적용합니다. "
+                    "직접 선택은 책임기술자 판단으로 평균 산정에 사용할 공식을 지정할 때 사용합니다."
+                )
+            )
+
+            if formula_mode_label == "설계강도 기준 자동추천":
+                selected_methods = None
+                st.info(f"자동추천 적용 공식: {get_recommended_formula_description(fck)}")
+            else:
+                selected_methods = st.multiselect(
+                    "평균 산정 적용 공식",
+                    formula_opts,
+                    default=[],
+                    help="직접 선택 모드에서는 1개 이상의 공식을 선택해야 계산할 수 있습니다."
+                )
+                if selected_methods:
+                    st.info(f"수동 선택 적용 공식: {', '.join(selected_methods)}")
+                else:
+                    st.warning("직접 선택 모드에서는 평균 산정에 사용할 공식을 1개 이상 선택하세요.")
 
             default_txt = "54 56 55 53 58 55 54 55 52 57 55 56 54 55 59 42 55 56 54 55"
             if 'ocr_result' in st.session_state:
@@ -1442,7 +1540,10 @@ with tab2:
                     "days": days,
                     "fck": fck,
                     "ct": ct,
+                    "formula_mode": res.get("Formula_Mode", "자동추천"),
                     "selected_methods": list(selected_methods) if selected_methods else [],
+                    "applied_methods": list(res.get("Applied_Formulas", [])),
+                    "recommended_methods": list(res.get("Recommended_Formulas", get_recommended_formulas(fck))),
                     "raw_text": txt,
                     "readings": rd,
                 }
@@ -1473,9 +1574,13 @@ with tab2:
             result_fck = float(meta.get("fck", fck))
             result_angle = meta.get("angle", angle)
             result_days = meta.get("days", days)
-            result_methods = meta.get("selected_methods", selected_methods)
+            result_formula_mode = meta.get("formula_mode", res.get("Formula_Mode", "자동추천"))
+            result_methods = meta.get("applied_methods", res.get("Applied_Formulas", []))
+            if not result_methods:
+                result_methods = get_recommended_formulas(result_fck)
 
             st.success(f"평균 추정 압축강도(코어보정 반영): **{res['Mean_Strength']:.2f} MPa**")
+            st.caption(f"평균 산정 방식: {result_formula_mode} / 적용 공식: {', '.join(result_methods)}")
             st.caption("※ 아래 결과는 마지막으로 [계산 실행]을 누른 시점의 입력값 기준입니다. 입력값을 변경한 경우 다시 계산하세요.")
 
             with st.container(border=True):
@@ -1542,6 +1647,8 @@ with tab2:
                     "보정 R₀": f"{res['R0']:.4f}",
                     "재령계수 α": f"{res['Age_Coeff']:.3f}",
                     "코어 보정계수 Ct": f"{res['Core_Coeff']:.2f}",
+                    "평균 산정 방식": result_formula_mode,
+                    "적용 공식": ", ".join(result_methods),
                     "평균 추정 압축강도": f"{res['Mean_Strength']:.2f} MPa",
                     "강도비(설계 대비)": f"{(res['Mean_Strength']/result_fck*100):.1f} %" if result_fck else "-",
                 }
@@ -1556,7 +1663,9 @@ with tab2:
                         report_type="반발경도",
                         summary_dict=summary,
                         detail_df=detail_pdf,
-                        notes=f"적용 공식: {', '.join(result_methods) if result_methods else '자동추천'}\n"
+                        notes=f"공식 선택 방식: {result_formula_mode}\n"
+                              f"추천 기준: {get_recommended_formula_description(result_fck)}\n"
+                              f"적용 공식: {', '.join(result_methods) if result_methods else '-'}\n"
                               f"기각 데이터: {res['Excluded']}"
                     )
                     st.download_button(
@@ -1672,6 +1781,8 @@ with tab2:
                             "지점": row.get("지점", "P"),
                             "설계": result_fck,
                             "Ct": result_ct,
+                            "공식선택방식": res.get("Formula_Mode", "자동추천"),
+                            "적용공식": ", ".join(res.get("Applied_Formulas", [])),
                             "추정강도": round(res["Mean_Strength"], 2),
                             "강도비(%)": round((res["Mean_Strength"] / result_fck) * 100, 1) if result_fck != 0 else np.nan,
                             "유효평균R": round(res["R_avg"], 3),
@@ -1690,6 +1801,8 @@ with tab2:
                             "지점": row.get("지점", "P"),
                             "설계": _float_or_nan(fck_v),
                             "Ct": _float_or_nan(ct_v),
+                            "공식선택방식": "자동추천",
+                            "적용공식": ", ".join(get_recommended_formulas(fck_v)),
                             "추정강도": np.nan,
                             "강도비(%)": np.nan,
                             "유효평균R": np.nan,
@@ -1710,7 +1823,7 @@ with tab2:
                 final_df = pd.DataFrame(batch_res)
                 res_tab1, res_tab2 = st.tabs(["📋 요약", "🔍 세부 데이터"])
                 with res_tab1:
-                    cols = ["지점", "설계", "Ct", "추정강도", "강도비(%)"]
+                    cols = ["지점", "설계", "Ct", "공식선택방식", "적용공식", "추정강도", "강도비(%)"]
                     cols = [c for c in cols if c in final_df.columns]
                     st.dataframe(final_df[cols], use_container_width=True, hide_index=True)
                 with res_tab2:
@@ -2032,7 +2145,7 @@ with tab4:
                 st.rerun()
 
         # 공식별 통계
-        formula_cols = [c for c in ["일본재료", "일본건축", "과기부", "권영웅", "KALIS"] if c in edited_recs.columns]
+        formula_cols = [c for c in REBOUND_FORMULA_OPTIONS if c in edited_recs.columns]
         active_recs = edited_recs[edited_recs["유지"] == True]
 
         if len(active_recs) >= 2 and formula_cols:
@@ -2065,8 +2178,7 @@ with tab4:
                            f"가장 부적합: {worst['공식']} (CV {worst['변동계수CV(%)']:.2f}%)")
 
                 # 설계강도별 권장 공식과의 일치 여부 안내
-                recommended_set = ({"일본건축", "일본재료"} if st_fck < 40
-                                   else {"과기부", "권영웅", "KALIS"})
+                recommended_set = set(get_recommended_formulas(st_fck))
                 if best["공식"] not in recommended_set:
                     st.warning(f"⚠️ 자동 추천 공식({best['공식']})이 설계강도 {st_fck}MPa 기준 "
                                f"권장 공식군({', '.join(recommended_set)})과 다릅니다. "
