@@ -210,19 +210,19 @@ REBOUND_POINT_POLICY_EXACT_20 = "exact_20"
 REBOUND_POINT_POLICY_MIN_20 = "min_20"
 REBOUND_POINT_POLICY_NO_MINIMUM = "no_minimum"  # 내부/테스트용: 지침 검증을 끄는 경우
 DEFAULT_REBOUND_POINT_POLICY = REBOUND_POINT_POLICY_EXACT_20
-REBOUND_DISCARD_COUNT_LIMIT_20 = 5
-REBOUND_DISCARD_RATIO_LIMIT = 0.25
+REBOUND_DISCARD_COUNT_LIMIT_20 = 4  # 지침 ③: 버리는 값 4개 이상이면 시험값 군 전체 무효
+REBOUND_DISCARD_RATIO_LIMIT = 0.20  # 지침 ③ 비례 적용(20점 기준 4개=20%)
 
 REBOUND_POINT_POLICY_OPTIONS = {
     REBOUND_POINT_POLICY_EXACT_20: {
         "label": "정확히 20개",
         "short_label": "정확히20",
-        "description": "1개소당 측정값을 정확히 20개로 제한합니다. 기각값이 5개 이상이면 시험 무효입니다.",
+        "description": "1개소당 측정값을 정확히 20개로 제한합니다. 기각값이 4개 이상이면 시험 무효입니다.",
     },
     REBOUND_POINT_POLICY_MIN_20: {
         "label": "20개 이상 허용",
         "short_label": "20개이상",
-        "description": "측정값을 20개 이상 허용합니다. 기각 기준은 20개 중 5개에 해당하는 25% 이상으로 판정합니다.",
+        "description": "측정값을 20개 이상 허용합니다. 기각 기준은 20개 중 4개에 해당하는 20% 이상으로 판정합니다.",
     },
     REBOUND_POINT_POLICY_NO_MINIMUM: {
         "label": "측정점수 제한 없음",
@@ -978,7 +978,8 @@ def calculate_strength(
 
     # 타격방향 보정(엑셀 2차식)
     corr = float(get_angle_correction(R_avg, angle))
-    R0 = R_avg + corr
+    # 지침 ⑥: 보정반발경도(R0)는 소수 첫째자리 기준으로 결정하여 강도 추정에 적용
+    R0 = round(R_avg + corr, 1)
 
     # 재령 계수
     age_c = float(get_age_coefficient(days))
@@ -1258,11 +1259,11 @@ def run_validation_tests():
 
     exp_Ravg = 59.195
     exp_dR = -3.680913945
-    exp_R0 = 55.514086055
+    exp_R0 = 55.5  # 지침 ⑥: R0 소수 첫째자리 반올림(55.514086… → 55.5)
     exp_age = 0.63
-    exp_jsms = 33.0768202086
-    exp_aij = 31.194309588372
-    exp_mst = 45.132810978528
+    exp_jsms = 33.06555      # (1.27*55.5-18.0)*0.63
+    exp_aij = 31.187961      # (7.3*55.5+100)*0.098*0.63
+    exp_mst = 45.119592      # (15.2*55.5-112.8)*0.098*0.63
 
     def close(a, b, tol=1e-6):
         return abs(a - b) <= tol
@@ -1285,7 +1286,7 @@ def run_validation_tests():
     tc2_pass = ok2 and (res2["Discard"] == 2)
     results.append(("TC2(기각 2개, 무효X)", tc2_pass, res2 if ok2 else res2))
 
-    # ----- TC3: outlier 5개 -> 무효 (지침상 5개 이상 기각 시 무효) -----
+    # ----- TC3: outlier 5개 -> 무효 (지침상 4개 이상 기각 시 무효) -----
     base3 = [50] * 15 + [10, 90, 10, 90, 10]
     ok3, res3 = calculate_strength(base3, angle=0, days=3000, design_fck=24, core_coeff=1.0, require_20_points=True)
     tc3_pass = (not ok3) and ("시험 무효" in str(res3))
@@ -1341,9 +1342,9 @@ def run_validation_tests():
                                       point_count_policy=REBOUND_POINT_POLICY_EXACT_20)
     ok7d, res7d = calculate_strength([50] * 21, angle=0, days=3000, design_fck=24, core_coeff=1.0,
                                       point_count_policy=REBOUND_POINT_POLICY_MIN_20)
-    ok7e, res7e = calculate_strength([50] * 19 + [20] * 5, angle=0, days=3000, design_fck=24, core_coeff=1.0,
+    ok7e, res7e = calculate_strength([50] * 20 + [20] * 4, angle=0, days=3000, design_fck=24, core_coeff=1.0,
                                       point_count_policy=REBOUND_POINT_POLICY_MIN_20)
-    ok7f, res7f = calculate_strength([50] * 18 + [20] * 6, angle=0, days=3000, design_fck=24, core_coeff=1.0,
+    ok7f, res7f = calculate_strength([50] * 19 + [20] * 5, angle=0, days=3000, design_fck=24, core_coeff=1.0,
                                       point_count_policy=REBOUND_POINT_POLICY_MIN_20)
 
     tc7_pass = (
@@ -1351,7 +1352,7 @@ def run_validation_tests():
         (not ok7b) and "정확히 20개" in str(res7b) and
         (not ok7c) and "정확히 20개" in str(res7c) and
         ok7d and res7d.get("Point_Count_Policy") == REBOUND_POINT_POLICY_MIN_20 and res7d.get("N") == 21 and
-        ok7e and res7e.get("Discard") == 5 and res7e.get("Discard_Limit") == 6 and
+        ok7e and res7e.get("Discard") == 4 and res7e.get("Discard_Limit") == 5 and
         (not ok7f) and "기각" in str(res7f)
     )
     results.append(("TC7(측정점수 정책)", tc7_pass, {
@@ -1359,8 +1360,8 @@ def run_validation_tests():
         "정확히20_19개": res7b,
         "정확히20_21개": res7c,
         "20개이상_21개": {"N": res7d.get("N"), "정책": res7d.get("Point_Count_Policy_Label")} if ok7d else res7d,
-        "20개이상_24개중5개기각": {"Discard": res7e.get("Discard"), "Discard_Limit": res7e.get("Discard_Limit")} if ok7e else res7e,
-        "20개이상_24개중6개기각": res7f,
+        "20개이상_24개중4개기각": {"Discard": res7e.get("Discard"), "Discard_Limit": res7e.get("Discard_Limit")} if ok7e else res7e,
+        "20개이상_24개중5개기각": res7f,
     }))
 
     return results
@@ -1443,7 +1444,7 @@ with tab1:
 
     **5. 측정점수 정책을 확인하세요.**
     * 기본값은 [정확히 20개]입니다. 1개소당 20개 측정값만 사용하는 보수적인 방식입니다.
-    * 추가 측정값까지 반영해야 하는 경우 [20개 이상 허용]을 선택할 수 있으며, 이때 기각 기준은 25% 이상으로 적용됩니다.
+    * 추가 측정값까지 반영해야 하는 경우 [20개 이상 허용]을 선택할 수 있으며, 이때 기각 기준은 20% 이상으로 적용됩니다.
 
     **6. 통계ㆍ비교 탭 활용 안내**
     * 반발경도 단일평가 후 [통계 분석 목록에 추가] 버튼을 누르면 5개 공식별 결과가 모두 누적됩니다.
@@ -1463,8 +1464,8 @@ with tab1:
 
         #### **✅ 측정 및 기각 룰**
         1. **타격 점수**: 1개소당 **20점 이상** 측정을 원칙으로 하되, 프로그램에서는 정책을 명확히 분리합니다.
-           - **정확히 20개**: 20개가 아니면 계산하지 않으며, 기각값이 **5개 이상**이면 시험 무효입니다.
-           - **20개 이상 허용**: 20개 초과 입력을 허용하며, 기각값이 **전체의 25% 이상**이면 시험 무효입니다.
+           - **정확히 20개**: 20개가 아니면 계산하지 않으며, 기각값이 **4개 이상**이면 시험 무효입니다.
+           - **20개 이상 허용**: 20개 초과 입력을 허용하며, 기각값이 **전체의 20% 이상**이면 시험 무효입니다.
         2. **이상치 기각**: 전체 측정값의 산술평균을 낸 후, 평균값에서 **±20%를 벗어나는 데이터는 무효**
         3. **시험 무효**: 선택한 측정점수 정책의 기각 기준을 초과하면 재시험 권장
         """)
@@ -1876,7 +1877,7 @@ with tab2:
                 r3.metric("측정/유효/기각", f"{res['N']} / {res.get('Effective_N', res['N'] - res['Discard'])} / {res['Discard']}")
 
                 r4, r5, r6 = st.columns(3)
-                r4.metric("최종 R₀", f"{res['R0']:.6f}")
+                r4.metric("최종 R₀", f"{res['R0']:.1f}")
                 r5.metric("재령 계수 α", f"{res['Age_Coeff']:.2f}")
                 r6.metric("Ct", f"{res['Core_Coeff']:.2f}")
 
@@ -1932,7 +1933,7 @@ with tab2:
                     "측정점수 / 유효점수 / 기각수": f"{res['N']} / {res.get('Effective_N', res['N'] - res['Discard'])} / {res['Discard']}",
                     "유효 평균 R": f"{res['R_avg']:.3f}",
                     "타격방향 보정 ΔR": f"{res['Angle_Corr']:+.4f}",
-                    "보정 R₀": f"{res['R0']:.4f}",
+                    "보정 R₀": f"{res['R0']:.1f}",
                     "재령계수 α": f"{res['Age_Coeff']:.3f}",
                     "코어 보정계수 Ct": f"{res['Core_Coeff']:.2f}",
                     "평균 산정 방식": result_formula_mode,
@@ -2042,7 +2043,7 @@ with tab2:
                         REBOUND_POINT_POLICY_OPTIONS[REBOUND_POINT_POLICY_MIN_20]["short_label"],
                     ],
                     required=True,
-                    help="정확히20: 20개가 아니면 무효 / 20개이상: 20개 초과 입력 허용, 기각률 25% 이상 무효"
+                    help="정확히20: 20개가 아니면 무효 / 20개이상: 20개 초과 입력 허용, 기각률 20% 이상 무효"
                 ),
             },
             use_container_width=True,
