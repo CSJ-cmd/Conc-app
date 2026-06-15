@@ -12,7 +12,7 @@ from PIL import Image
 logger = logging.getLogger(__name__)
 
 # =========================================================
-# 1. 페이지 기본 설정 및 스타일
+# 1. 페이지 기본 설정 및 스타일 (재설계)
 # =========================================================
 st.set_page_config(
     page_title="구조물 안전진단 통합 평가 Pro",
@@ -23,6 +23,14 @@ st.set_page_config(
 
 st.markdown("""
     <style>
+    :root {
+        --brand: #0F5C6E;
+        --brand-deep: #0B4553;
+        --pass: #1B9E77;
+        --fail: #D62828;
+        --warn: #F4A100;
+    }
+
     .block-container {
         padding-top: 1rem !important;
         padding-bottom: 5rem !important;
@@ -30,20 +38,64 @@ st.markdown("""
         padding-right: 1rem !important;
         max-width: 100% !important;
     }
+
+    /* 탭: 세그먼트형 + 브랜드색 활성 */
     .stTabs [data-baseweb="tab-list"] {
-        gap: 8px;
+        gap: 6px;
         overflow-x: auto;
         white-space: nowrap;
         scrollbar-width: none;
         padding-left: 2px;
+        padding-bottom: 2px;
     }
     .stTabs [data-baseweb="tab"] {
-        height: 45px;
-        padding: 5px 15px;
-        background-color: #f0f2f6;
-        border-radius: 8px 8px 0px 0px;
+        height: 46px;
+        padding: 6px 16px;
+        background-color: rgba(127,127,127,0.08);
+        border-radius: 10px 10px 0px 0px;
         font-size: 14px;
+        font-weight: 500;
     }
+    .stTabs [aria-selected="true"] {
+        background-color: var(--brand) !important;
+        color: #ffffff !important;
+    }
+
+    /* 버튼: 라운드 + 강조 */
+    .stButton > button {
+        border-radius: 10px;
+        font-weight: 600;
+    }
+    .stButton > button[kind="primary"] {
+        background-color: var(--brand);
+        border-color: var(--brand);
+    }
+    .stButton > button[kind="primary"]:hover {
+        background-color: var(--brand-deep);
+        border-color: var(--brand-deep);
+    }
+
+    /* 메트릭 */
+    [data-testid="stMetricValue"] { font-size: 1.2rem !important; word-break: break-all; }
+    [data-testid="stMetricLabel"] { font-size: 0.85rem !important; }
+
+    /* 판정 카드 / 칩 (인라인 HTML에서 사용) */
+    .verdict-card {
+        border: 1px solid rgba(127,127,127,0.18);
+        border-radius: 14px;
+        padding: 18px 20px;
+        margin: 6px 0 14px;
+        background: rgba(127,127,127,0.04);
+    }
+    .verdict-badge {
+        display: inline-flex; align-items: center; gap: 6px;
+        font-size: 13px; font-weight: 600;
+        padding: 5px 12px; border-radius: 8px; margin-bottom: 10px;
+    }
+    .verdict-num { font-size: 50px; font-weight: 700; line-height: 1; font-variant-numeric: tabular-nums; }
+    .verdict-sub { font-size: 13px; color: rgba(127,127,127,0.95); }
+
+    /* expander 헤더 정렬 + 모바일 아이콘 텍스트 노출 보정 (기존 유지) */
     div[data-testid="stExpander"] details > summary {
         list-style: none !important;
         display: flex !important;
@@ -51,8 +103,9 @@ st.markdown("""
         padding: 10px !important;
         height: auto !important;
         min-height: 40px;
-        border: 1px solid #f0f2f6;
-        border-radius: 8px;
+        border: 1px solid rgba(127,127,127,0.15);
+        border-radius: 10px;
+        padding-left: 12px !important;
     }
     div[data-testid="stExpander"] details > summary::-webkit-details-marker { display: none !important; }
     div[data-testid="stExpander"] details > summary > svg {
@@ -64,14 +117,10 @@ st.markdown("""
         flex-shrink: 0 !important;
         display: block !important;
     }
-    /* 일부 모바일 환경에서 아이콘 폰트가 텍스트(arrow_right)로 노출되는 현상 대응 */
     div[data-testid="stExpander"] details > summary [class*="material"],
     div[data-testid="stExpander"] details > summary [data-testid*="icon"],
     div[data-testid="stExpander"] details > summary [aria-hidden="true"] {
         display: none !important;
-    }
-    div[data-testid="stExpander"] details > summary {
-        padding-left: 12px !important;
     }
     div[data-testid="stExpander"] details > summary p {
         font-size: 15px;
@@ -81,19 +130,16 @@ st.markdown("""
         white-space: normal !important;
         word-break: keep-all;
     }
-    [data-testid="stMetricValue"] { font-size: 1.1rem !important; word-break: break-all; }
-    [data-testid="stMetricLabel"] { font-size: 0.9rem !important; }
-    .calc-box { background-color: #f8f9fa; padding: 15px; border-radius: 10px; border-left: 5px solid #1f77b4; margin-bottom: 15px; }
+
+    .calc-box { background-color: rgba(127,127,127,0.06); padding: 15px; border-radius: 10px; border-left: 5px solid var(--brand); margin-bottom: 15px; }
     div[data-testid="stTable"] { overflow-x: auto; }
 
-    /* 모바일에서 좌측 접힘 컨트롤(아이콘 텍스트 노출) 숨김 */
     @media (max-width: 768px) {
         [data-testid="collapsedControl"] { display: none !important; }
         [data-testid="stHeader"] { height: 0 !important; }
         .block-container { padding-top: 0.5rem !important; }
-        div[data-testid="stExpander"] details > summary {
-            padding-left: 10px !important;
-        }
+        div[data-testid="stExpander"] details > summary { padding-left: 10px !important; }
+        .verdict-num { font-size: 42px; }
     }
     </style>
 """, unsafe_allow_html=True)
@@ -102,13 +148,9 @@ st.markdown("""
 if 'rebound_data' not in st.session_state:
     st.session_state['rebound_data'] = []
 
-# 통계·비교 탭에서 사용할 공식별 강도 누적 (지점별 5개 공식 값)
 if 'rebound_records' not in st.session_state:
-    st.session_state['rebound_records'] = []  # list of dict: {"지점","일본재료","일본건축","과기부","권영웅","KALIS","평균"}
+    st.session_state['rebound_records'] = []
 
-# 단일 반발경도 계산 결과 보관용
-# Streamlit은 버튼 클릭 때마다 전체 스크립트를 다시 실행하므로,
-# 계산 결과와 통계 추가 대상은 session_state에 저장해야 합니다.
 if 'last_rebound_result' not in st.session_state:
     st.session_state['last_rebound_result'] = None
 
@@ -178,7 +220,6 @@ def add_current_rebound_to_stats():
     st.session_state['last_added_signature'] = signature
     st.session_state['last_add_message'] = ("success", f"{point_name} 추가 완료 (평균 {rec['평균']:.2f} MPa, 5개 공식값 포함)")
 
-    # 다음 입력 기본값을 다음 지점 번호로 갱신
     st.session_state['add_point_name'] = f"P{len(st.session_state['rebound_records']) + 1}"
 
 
@@ -192,13 +233,8 @@ def is_mobile_client():
     return any(k in ua for k in mobile_keys)
 
 # =========================================================
-# 2. 핵심 로직 및 함수 정의
+# 2. 핵심 로직 및 함수 정의 (기존 로직 유지)
 # =========================================================
-
-# 반발경도 계산 입력 검증 기준
-# - UI에서 제한하더라도 엑셀/텍스트/직접 호출을 통해 비정상 값이 들어올 수 있으므로
-#   최종 계산 함수에서 한 번 더 검증합니다.
-# - 측정점수 정책은 "정확히 20개"와 "20개 이상 허용"을 명시적으로 분리합니다.
 ALLOWED_REBOUND_ANGLES = {-90, -45, 0, 45, 90}
 REBOUND_READING_MIN = 10.0
 REBOUND_READING_MAX = 100.0
@@ -208,10 +244,10 @@ REBOUND_FORMULA_RECOMMEND_THRESHOLD = 40.0
 
 REBOUND_POINT_POLICY_EXACT_20 = "exact_20"
 REBOUND_POINT_POLICY_MIN_20 = "min_20"
-REBOUND_POINT_POLICY_NO_MINIMUM = "no_minimum"  # 내부/테스트용: 지침 검증을 끄는 경우
+REBOUND_POINT_POLICY_NO_MINIMUM = "no_minimum"
 DEFAULT_REBOUND_POINT_POLICY = REBOUND_POINT_POLICY_EXACT_20
-REBOUND_DISCARD_COUNT_LIMIT_20 = 4  # 지침 ③: 버리는 값 4개 이상이면 시험값 군 전체 무효
-REBOUND_DISCARD_RATIO_LIMIT = 0.20  # 지침 ③ 비례 적용(20점 기준 4개=20%)
+REBOUND_DISCARD_COUNT_LIMIT_20 = 4
+REBOUND_DISCARD_RATIO_LIMIT = 0.20
 
 REBOUND_POINT_POLICY_OPTIONS = {
     REBOUND_POINT_POLICY_EXACT_20: {
@@ -237,7 +273,6 @@ for _policy_key, _policy_meta in REBOUND_POINT_POLICY_OPTIONS.items():
     REBOUND_POINT_POLICY_LABEL_TO_KEY[_policy_meta["label"]] = _policy_key
     REBOUND_POINT_POLICY_LABEL_TO_KEY[_policy_meta["short_label"]] = _policy_key
 
-# 사용자가 엑셀에 조금 다른 표현으로 적어도 읽을 수 있도록 별칭을 허용합니다.
 REBOUND_POINT_POLICY_LABEL_TO_KEY.update({
     "정확히 20": REBOUND_POINT_POLICY_EXACT_20,
     "정확히20개": REBOUND_POINT_POLICY_EXACT_20,
@@ -259,13 +294,6 @@ REBOUND_POINT_POLICY_LABEL_TO_KEY.update({
 
 
 def normalize_rebound_point_policy(point_count_policy=None, require_20_points=True):
-    """
-    측정점수 정책을 내부 key로 정규화합니다.
-
-    기존 코드 호환성:
-    - point_count_policy가 None이고 require_20_points=True이면 기본값 "정확히 20개"를 사용합니다.
-    - point_count_policy가 None이고 require_20_points=False이면 내부용 "제한 없음"으로 처리합니다.
-    """
     if point_count_policy is None:
         return DEFAULT_REBOUND_POINT_POLICY if require_20_points else REBOUND_POINT_POLICY_NO_MINIMUM
 
@@ -303,7 +331,6 @@ def get_rebound_point_policy_short_label(point_count_policy):
 
 
 def get_discard_limit_for_policy(point_count, point_count_policy):
-    """측정점수 정책별 기각 무효 기준 개수를 반환합니다."""
     n = int(point_count)
     policy_key = normalize_rebound_point_policy(point_count_policy)
 
@@ -317,12 +344,6 @@ def get_discard_limit_for_policy(point_count, point_count_policy):
 
 
 def get_recommended_formulas(design_fck):
-    """
-    설계강도 기준 평균 산정 공식 자동추천.
-
-    - 40MPa 미만: 일반강도 콘크리트로 보고 일본건축/일본재료 적용
-    - 40MPa 이상: 고강도 영역까지 고려하여 과기부/권영웅/KALIS 적용
-    """
     try:
         fck = float(design_fck)
     except (TypeError, ValueError):
@@ -337,7 +358,6 @@ def get_recommended_formulas(design_fck):
 
 
 def get_recommended_formula_description(design_fck):
-    """UI 표시용 자동추천 설명 문구를 반환합니다."""
     formulas = get_recommended_formulas(design_fck)
     try:
         fck = float(design_fck)
@@ -351,6 +371,7 @@ def get_recommended_formula_description(design_fck):
     )
     return f"{range_label}: {', '.join(formulas)}"
 
+
 @st.cache_resource
 def load_ocr_model():
     import easyocr
@@ -358,16 +379,12 @@ def load_ocr_model():
 
 
 def _normalize_ocr_token(text):
-    """OCR 오인식 문자를 숫자 파싱 친화적으로 정규화"""
     text = str(text)
-
-    # 천단위 콤마(예: 1,234)는 제거
     text = re.sub(r'(?<=\d),(?=\d{3}(?:\D|$))', '', text)
-
     replacements = {
         'O': '0', 'o': '0',
         'I': '1', 'l': '1', '|': '1',
-        ',': '.', ';': '.',   # 기존 ';' -> ':' 오타성 치환 수정
+        ',': '.', ';': '.',
     }
     for src, dst in replacements.items():
         text = text.replace(src, dst)
@@ -375,7 +392,6 @@ def _normalize_ocr_token(text):
 
 
 def _extract_numeric_candidates(ocr_result):
-    """easyocr detail=1 결과에서 숫자 후보를 추출"""
     candidates = []
     for item in ocr_result:
         if len(item) < 3:
@@ -408,7 +424,6 @@ def _extract_numeric_candidates(ocr_result):
 
 
 def _cluster_rows(candidates):
-    """y 좌표 기반으로 OCR 숫자 후보를 행 단위로 군집화"""
     if not candidates:
         return []
 
@@ -435,15 +450,10 @@ def _cluster_rows(candidates):
 
 
 def _select_best_20_readings(ocr_result, target_count=20):
-    """
-    전표형(영수증형) 이미지에서 측정값 영역을 우선 추출하고
-    목표 개수(target_count, 기본 20개)에 맞춰 숫자 목록을 반환
-    """
     candidates = _extract_numeric_candidates(ocr_result)
     if not candidates:
         return []
 
-    # 반발경도 범위 중심 후보 우선
     plausible = [c for c in candidates if 10 <= c["value"] <= 100]
     work = plausible if plausible else candidates
 
@@ -451,7 +461,6 @@ def _select_best_20_readings(ocr_result, target_count=20):
     if not rows:
         return []
 
-    # 측정치 블록은 하단에 밀집해 나타나는 경우가 많으므로, 하단의 다수 숫자 행 우선
     measurement_rows = [r for r in rows if len(r) >= 3]
     if measurement_rows:
         selected_rows = measurement_rows[-max(4, min(6, len(measurement_rows))):]
@@ -464,7 +473,6 @@ def _select_best_20_readings(ocr_result, target_count=20):
     if len(ordered_values) >= target_count:
         return ordered_values[:target_count]
 
-    # 부족하면 나머지 후보를 y/x 순서대로 보충
     remain = [
         c["value"]
         for c in sorted(work, key=lambda c: (c["y"], c["x"]))
@@ -489,56 +497,23 @@ def _format_readings_for_text(values):
 
 
 def _normalize_manual_reading_text(raw_text):
-    """
-    사람이 직접 입력한 측정값 문자열을 파싱하기 쉽게 정리합니다.
-
-    핵심 원칙:
-    - 수동 입력에서 쉼표(,)는 기본적으로 숫자 구분자로 봅니다.
-      예: "54,56,55" -> "54 56 55"
-    - 소수점은 점(.) 사용을 권장합니다.
-      예: "54.5 56.0 55.5"
-    - OCR 오인식 보정(O->0, l->1 등)은 여기서 하지 않습니다.
-      그런 보정은 _normalize_ocr_token()에서만 처리합니다.
-    """
     if raw_text is None:
         return ""
 
     text = str(raw_text)
-
-    # 유니코드 대시 문자를 일반 하이픈으로 통일합니다.
     text = text.replace("−", "-").replace("–", "-").replace("—", "-")
-
-    # 천 단위 콤마는 제거합니다.
-    # 예: "1,234" -> "1234"
     text = re.sub(r'(?<=\d),(?=\d{3}(?:\D|$))', '', text)
-
-    # 숫자 사이 쉼표는 구분자로 처리합니다.
-    # 예: "54,56,55" -> "54 56 55"
     text = re.sub(r'(?<=\d),(?=\d)', ' ', text)
-
-    # 세미콜론, 탭, 줄바꿈, 슬래시 등도 구분자로 처리합니다.
     text = re.sub(r'[;\t\r\n/]+', ' ', text)
-
-    # 괄호류는 공백 처리합니다.
     text = re.sub(r'[\[\]\(\)\{\}]', ' ', text)
-
     return text.strip()
 
 
 def parse_readings_text(raw_text):
-    """
-    수동 입력/엑셀 입력/텍스트 입력에서 숫자 목록을 파싱합니다.
-
-    주의:
-    - 이 함수는 사람이 입력한 값을 대상으로 합니다.
-    - OCR 원문 보정은 _normalize_ocr_token()에서 별도로 처리합니다.
-    - 소수점은 '.' 사용을 권장합니다.
-    """
     text = _normalize_manual_reading_text(raw_text)
     if not text:
         return []
 
-    # 정수, 소수, .5 형태까지 허용합니다.
     tokens = re.findall(r'[-+]?(?:\d+(?:\.\d*)?|\.\d+)', text)
 
     vals = []
@@ -547,23 +522,12 @@ def parse_readings_text(raw_text):
             value = float(token)
         except (TypeError, ValueError):
             continue
-
         if np.isfinite(value):
             vals.append(value)
-
     return vals
 
 
 def parse_ocr_readings_text(raw_text):
-    """
-    OCR 원문에서 숫자 목록을 파싱할 때 사용하는 함수입니다.
-
-    현재 extract_numbers_from_image()는 내부에서 OCR 후보를 숫자로 정리한 뒤
-    _format_readings_for_text()로 공백 구분 문자열을 반환하므로,
-    일반적인 화면 흐름에서는 parse_readings_text()만으로도 충분합니다.
-
-    다만 향후 OCR 원문을 직접 파싱할 일이 생길 수 있으므로 OCR 전용 함수를 분리해 둡니다.
-    """
     if raw_text is None:
         return []
 
@@ -576,10 +540,8 @@ def parse_ocr_readings_text(raw_text):
             value = float(token)
         except (TypeError, ValueError):
             continue
-
         if np.isfinite(value):
             vals.append(value)
-
     return vals
 
 
@@ -591,7 +553,6 @@ def _safe_num(v, default, cast=float):
 
 
 def _float_or_nan(v):
-    """표시/저장용 숫자 변환. 변환 실패 또는 NaN/inf는 np.nan으로 반환합니다."""
     try:
         n = float(v)
     except (TypeError, ValueError):
@@ -600,7 +561,6 @@ def _float_or_nan(v):
 
 
 def _coerce_finite_float(value, field_name):
-    """계산에 쓰는 입력값을 유한한 float로 변환합니다."""
     if isinstance(value, (bool, np.bool_)):
         return False, f"{field_name}은(는) True/False가 아니라 숫자로 입력해야 합니다."
 
@@ -623,16 +583,6 @@ def validate_rebound_inputs(
     selected_formulas=None,
     core_coeff=1.0,
 ):
-    """
-    반발경도 계산 전 입력값을 검증하고 계산 가능한 형태로 정규화합니다.
-
-    검증 대상:
-    - 측정값 리스트 여부, 숫자 여부, NaN/inf 여부
-    - 반발경도 허용 범위(기본 10~100)
-    - 타격각도 허용값(-90, -45, 0, 45, 90)
-    - 재령, 설계강도, Ct가 0보다 큰 유한수인지 여부
-    - 공식 선택값이 알려진 공식명인지 여부
-    """
     if readings is None:
         return False, "데이터 없음: 측정값 목록이 비어 있습니다."
 
@@ -690,10 +640,6 @@ def validate_rebound_inputs(
     if ct_num <= 0:
         return False, "코어 보정계수(Ct)는 0보다 커야 합니다."
 
-    # selected_formulas의 의미를 명확히 분리합니다.
-    # - None: 설계강도 기준 자동추천
-    # - list/tuple/set 등: 사용자가 직접 선택한 공식 목록
-    # - 빈 리스트: 수동선택 모드에서 아무 공식도 고르지 않은 상태로 간주
     if selected_formulas is None:
         normalized_formulas = None
     else:
@@ -732,9 +678,6 @@ def validate_rebound_inputs(
 
 
 def extract_numbers_from_image(image_input, ocr_mode="정밀"):
-    """
-    OCR 전처리 강화 + 전표형 측정지에서 20개 측정값 자동 추출
-    """
     try:
         import cv2
 
@@ -743,7 +686,6 @@ def extract_numbers_from_image(image_input, ocr_mode="정밀"):
         else:
             image = Image.open(image_input)
 
-        # cv2 처리 안정화를 위해 모드 정규화
         if image.mode not in ("RGB", "RGBA", "L"):
             image = image.convert("RGB")
 
@@ -756,7 +698,6 @@ def extract_numbers_from_image(image_input, ocr_mode="정밀"):
 
         image_np = np.array(image)
 
-        # 이미지 채널 수에 맞게 안전 변환
         if image_np.ndim == 2:
             gray = image_np
         elif image_np.shape[2] == 4:
@@ -766,7 +707,6 @@ def extract_numbers_from_image(image_input, ocr_mode="정밀"):
 
         blur = cv2.medianBlur(gray, 3)
 
-        # 다양한 조건 대응을 위한 전처리 후보군
         clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8)).apply(gray)
         th_adapt = cv2.adaptiveThreshold(
             blur, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
@@ -795,7 +735,6 @@ def extract_numbers_from_image(image_input, ocr_mode="정밀"):
             )
             values = _select_best_20_readings(result_detail, target_count=20)
 
-            # 목표 20개 충족, 값 범위, 평균 confidence를 종합 점수화
             score = len(values) * 5
             if len(values) >= 20:
                 score += 100
@@ -810,7 +749,6 @@ def extract_numbers_from_image(image_input, ocr_mode="정밀"):
                 best_score = score
                 best_values = values
 
-        # 실패 시 기존 방식처럼 전체 숫자라도 최대한 반환
         if not best_values:
             fallback = reader.readtext(gray, detail=0, allowlist='0123456789. ')
             fallback_nums = []
@@ -830,29 +768,22 @@ def extract_numbers_from_image(image_input, ocr_mode="정밀"):
         return ""
 
 
-# ---------------------------------------------------------
-# [수정 1] 타격방향 보정(ΔR) : 엑셀(1. 원본) 2차식 그대로
-# ---------------------------------------------------------
 def get_angle_correction(R_val, angle):
-    """
-    엑셀(1. 원본) '타격방향 보정(ΔR)'과 동일한 2차식 적용.
-    ΔR = a*R^2 + b*R + c
-    """
     try:
         angle = int(angle)
         R = float(R_val)
     except (TypeError, ValueError):
         return 0.0
 
-    if angle == 90:     # 상향 수직
+    if angle == 90:
         return (-0.0018 * R * R) + (0.2455 * R) - 11.906
-    elif angle == 45:   # 상향 경사
+    elif angle == 45:
         return (-0.0026 * R * R) + (0.2563 * R) - 9.24
-    elif angle == -90:  # 하향 수직
+    elif angle == -90:
         return (-0.0009 * R * R) + (0.0094 * R) + 4.48
-    elif angle == -45:  # 하향 경사
+    elif angle == -45:
         return (-0.0007 * R * R) + (0.0129 * R) + 3.14
-    else:               # 0° 수평(또는 그 외)
+    else:
         return 0.0
 
 
@@ -862,7 +793,6 @@ def get_age_coefficient(days):
     except (TypeError, ValueError):
         days = 3000.0
 
-    # 엑셀과 동일 테이블(보간)
     age_table = {
         10: 1.55, 20: 1.12, 28: 1.00, 50: 0.87, 100: 0.78, 150: 0.74,
         200: 0.72, 300: 0.70, 500: 0.67, 1000: 0.65, 3000: 0.63
@@ -883,20 +813,16 @@ def get_age_coefficient(days):
     return 1.0
 
 
-# ---------------------------------------------------------
-# [수정 2,3,5] 20점 기준 + 마스크 기반 기각 + Ct 반영
-# ---------------------------------------------------------
 def calculate_strength(
     readings,
     angle,
     days,
     design_fck=24.0,
     selected_formulas=None,
-    core_coeff=1.0,          # Ct
-    require_20_points=True,  # 기존 호출부 호환용
-    point_count_policy=None  # exact_20 / min_20
+    core_coeff=1.0,
+    require_20_points=True,
+    point_count_policy=None
 ):
-    # 계산 전 최종 방어선: 텍스트/엑셀/UI 어디에서 들어온 값이든 여기서 검증합니다.
     valid_input, validated = validate_rebound_inputs(
         readings=readings,
         angle=angle,
@@ -917,7 +843,6 @@ def calculate_strength(
 
     n = len(rd)
 
-    # 측정점수 정책 명확화
     try:
         point_policy = normalize_rebound_point_policy(point_count_policy, require_20_points=require_20_points)
     except ValueError as e:
@@ -941,20 +866,14 @@ def calculate_strength(
     if point_policy == REBOUND_POINT_POLICY_NO_MINIMUM and n < 1:
         return False, "시험 무효: 측정값이 없습니다."
 
-    # 1차 평균
     avg1 = float(np.mean(rd))
 
-    # ±20% 기각 (마스크 기반: 중복값 오류 방지)
     low, high = avg1 * 0.8, avg1 * 1.2
-    # 경계값(정확히 ±20%)이 부동소수점 오차로 기각되지 않도록 작은 허용오차를 둡니다.
     boundary_tol = 1e-12
     valid_mask = [(low - boundary_tol <= r <= high + boundary_tol) for r in rd]
     valid = [r for r, m in zip(rd, valid_mask) if m]
     excluded = [r for r, m in zip(rd, valid_mask) if not m]
 
-    # 기각 판정 기준
-    # - 정확히 20개 정책: 지침 문구 그대로 5개 이상 기각 시 무효
-    # - 20개 이상 허용 정책: 20개 중 5개와 같은 25% 이상 기각 시 무효
     discard_ratio = (len(excluded) / n) if n else 1.0
     discard_limit = get_discard_limit_for_policy(n, point_policy)
     if point_policy == REBOUND_POINT_POLICY_EXACT_20:
@@ -973,23 +892,18 @@ def calculate_strength(
     if len(valid) == 0:
         return False, "유효 데이터 없음 (±20% 범위 내 값이 없습니다)"
 
-    # 유효 평균
     R_avg = float(np.mean(valid))
 
-    # 타격방향 보정(엑셀 2차식)
     corr = float(get_angle_correction(R_avg, angle))
-    # 지침 ⑥: 보정반발경도(R0)는 소수 첫째자리 기준으로 결정하여 강도 추정에 적용
     R0 = round(R_avg + corr, 1)
 
-    # 재령 계수
     age_c = float(get_age_coefficient(days))
 
-    # 강도식 (원값)
-    f_jsms = max(0.0, (1.27 * R0 - 18.0) * age_c)                # 일본재료학회
-    f_aij = max(0.0, (7.3 * R0 + 100.0) * 0.098 * age_c)         # 일본건축학회
-    f_mst = max(0.0, (15.2 * R0 - 112.8) * 0.098 * age_c)        # 과기부(고강도)
-    f_kwon = max(0.0, (2.304 * R0 - 38.80) * age_c)              # 권영웅
-    f_kalis = max(0.0, (1.3343 * R0 + 8.1977) * age_c)           # KALIS
+    f_jsms = max(0.0, (1.27 * R0 - 18.0) * age_c)
+    f_aij = max(0.0, (7.3 * R0 + 100.0) * 0.098 * age_c)
+    f_mst = max(0.0, (15.2 * R0 - 112.8) * 0.098 * age_c)
+    f_kwon = max(0.0, (2.304 * R0 - 38.80) * age_c)
+    f_kalis = max(0.0, (1.3343 * R0 + 8.1977) * age_c)
 
     all_formulas_raw = {
         "일본재료": f_jsms,
@@ -999,11 +913,8 @@ def calculate_strength(
         "KALIS": f_kalis,
     }
 
-    # Ct 반영
     all_formulas = {k: v * ct for k, v in all_formulas_raw.items()}
 
-    # 평균 산정 공식 선택
-    # selected_formulas=None이면 자동추천, []이면 수동선택 모드에서 미선택으로 처리합니다.
     recommended_formulas = get_recommended_formulas(design_fck)
     if selected_formulas is None:
         formula_mode = "자동추천"
@@ -1057,11 +968,7 @@ def convert_df(df):
     return df.to_csv(index=False).encode('utf-8-sig')
 
 
-# ---------------------------------------------------------
-# PDF 보고서 생성 (한글 폰트 자동 탐색)
-# ---------------------------------------------------------
 def _find_korean_font():
-    """시스템에 설치된 한글 폰트 경로 자동 탐색"""
     import os
     candidates = [
         "/usr/share/fonts/truetype/nanum/NanumGothic.ttf",
@@ -1080,13 +987,6 @@ def _find_korean_font():
 
 
 def generate_pdf_report(project_name, report_type, summary_dict, detail_df=None, notes=None):
-    """
-    정밀안전점검 보고서 부록용 PDF 생성
-    - report_type: '반발경도' / '탄산화' / '통계'
-    - summary_dict: 표 상단 요약 정보 (dict)
-    - detail_df: 상세 데이터 (DataFrame, 선택)
-    - notes: 추가 비고 (str, 선택)
-    """
     try:
         from reportlab.lib.pagesizes import A4
         from reportlab.lib import colors
@@ -1131,7 +1031,6 @@ def generate_pdf_report(project_name, report_type, summary_dict, detail_df=None,
     story.append(Paragraph(f"작성일: {datetime.now().strftime('%Y-%m-%d %H:%M')}", body))
     story.append(Spacer(1, 6*mm))
 
-    # 요약 표
     story.append(Paragraph("■ 평가 요약", h2))
     summary_rows = [["항목", "값"]]
     for k, v in summary_dict.items():
@@ -1140,7 +1039,7 @@ def generate_pdf_report(project_name, report_type, summary_dict, detail_df=None,
     t.setStyle(TableStyle([
         ('FONTNAME', (0, 0), (-1, -1), font_name),
         ('FONTSIZE', (0, 0), (-1, -1), 9),
-        ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor("#1f77b4")),
+        ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor("#0F5C6E")),
         ('TEXTCOLOR', (0, 0), (-1, 0), colors.white),
         ('GRID', (0, 0), (-1, -1), 0.4, colors.grey),
         ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
@@ -1149,10 +1048,8 @@ def generate_pdf_report(project_name, report_type, summary_dict, detail_df=None,
     story.append(t)
     story.append(Spacer(1, 6*mm))
 
-    # 상세 데이터
     if detail_df is not None and not detail_df.empty:
         story.append(Paragraph("■ 상세 데이터", h2))
-        # 컬럼이 너무 많으면 자르고 안내
         max_cols = 8
         df_show = detail_df.iloc[:, :max_cols].copy()
         if len(detail_df.columns) > max_cols:
@@ -1166,7 +1063,7 @@ def generate_pdf_report(project_name, report_type, summary_dict, detail_df=None,
         td.setStyle(TableStyle([
             ('FONTNAME', (0, 0), (-1, -1), font_name),
             ('FONTSIZE', (0, 0), (-1, -1), 7.5),
-            ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor("#4D96FF")),
+            ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor("#137DA1")),
             ('TEXTCOLOR', (0, 0), (-1, 0), colors.white),
             ('GRID', (0, 0), (-1, -1), 0.3, colors.grey),
             ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
@@ -1207,23 +1104,9 @@ def to_excel(df):
     raise RuntimeError("엑셀 저장 엔진(xlsxwriter/openpyxl)이 설치되어 있지 않습니다.") from last_err
 
 
-# =========================================================
-# 2-1) 검증용 테스트 케이스 (엑셀 값과 동일한 케이스 포함)
-# =========================================================
 def run_validation_tests():
-    """
-    테스트 케이스:
-    - TC0: 수동/엑셀 입력 파서가 공백, 쉼표, 줄바꿈, 소수 입력을 안전하게 처리하는지 확인
-    - TC1: 첨부 엑셀(1. 원본 / 2. 정리)와 수치가 일치하는 대표 케이스(상부구조 S1, 바닥판, 90°, 3000일)
-    - TC2: 20점 중 2개 outlier(±20% 밖) -> 기각 2개, 무효 아님
-    - TC3: 20점 중 5개 outlier -> 시험 무효 처리 확인
-    - TC4: Ct=1.10 적용 시 강도들이 1.10배 되는지 확인
-    - TC5: NaN/inf, 허용 범위 밖 측정값, 잘못된 각도/재령/설계강도/Ct/공식명을 차단하는지 확인
-    - TC6: 공식 자동추천/수동선택 모드가 의도대로 분리되는지 확인
-    """
     results = []
 
-    # ----- TC0: 입력 파서 검증 -----
     parser_cases = [
         ("54 56 55", [54.0, 56.0, 55.0]),
         ("54,56,55", [54.0, 56.0, 55.0]),
@@ -1244,7 +1127,6 @@ def run_validation_tests():
 
     results.append(("TC0(입력 파서)", parser_pass, parser_details))
 
-    # ----- TC1: 엑셀 일치 케이스 -----
     readings_tc1 = [
         58.4, 57.0, 61.8, 61.2, 60.6,
         58.9, 59.9, 58.9, 58.2, 57.8,
@@ -1259,11 +1141,11 @@ def run_validation_tests():
 
     exp_Ravg = 59.195
     exp_dR = -3.680913945
-    exp_R0 = 55.5  # 지침 ⑥: R0 소수 첫째자리 반올림(55.514086… → 55.5)
+    exp_R0 = 55.5
     exp_age = 0.63
-    exp_jsms = 33.06555      # (1.27*55.5-18.0)*0.63
-    exp_aij = 31.187961      # (7.3*55.5+100)*0.098*0.63
-    exp_mst = 45.119592      # (15.2*55.5-112.8)*0.098*0.63
+    exp_jsms = 33.06555
+    exp_aij = 31.187961
+    exp_mst = 45.119592
 
     def close(a, b, tol=1e-6):
         return abs(a - b) <= tol
@@ -1280,25 +1162,21 @@ def run_validation_tests():
     )
     results.append(("TC1(엑셀 일치)", tc1_pass, res if ok else res))
 
-    # ----- TC2: outlier 2개 -> 기각 2개 -----
     base = [50] * 18 + [10, 90]
     ok2, res2 = calculate_strength(base, angle=0, days=3000, design_fck=24, core_coeff=1.0, require_20_points=True)
     tc2_pass = ok2 and (res2["Discard"] == 2)
     results.append(("TC2(기각 2개, 무효X)", tc2_pass, res2 if ok2 else res2))
 
-    # ----- TC3: outlier 5개 -> 무효 (지침상 4개 이상 기각 시 무효) -----
     base3 = [50] * 15 + [10, 90, 10, 90, 10]
     ok3, res3 = calculate_strength(base3, angle=0, days=3000, design_fck=24, core_coeff=1.0, require_20_points=True)
     tc3_pass = (not ok3) and ("시험 무효" in str(res3))
     results.append(("TC3(기각 5개, 무효)", tc3_pass, res3))
 
-    # ----- TC4: Ct=1.10 배율 확인 -----
     ok4a, res4a = calculate_strength(readings_tc1, angle=90, days=3000, design_fck=40, core_coeff=1.0, require_20_points=True)
     ok4b, res4b = calculate_strength(readings_tc1, angle=90, days=3000, design_fck=40, core_coeff=1.10, require_20_points=True)
     tc4_pass = ok4a and ok4b and close(res4b["Formulas"]["과기부"], res4a["Formulas"]["과기부"] * 1.10, 1e-6)
     results.append(("TC4(Ct 배율)", tc4_pass, {"MST@1.0": res4a["Formulas"]["과기부"], "MST@1.10": res4b["Formulas"]["과기부"]}))
 
-    # ----- TC5: 입력값 검증 -----
     validation_cases = {
         "NaN 측정값 차단": calculate_strength([50] * 19 + [np.nan], angle=0, days=3000, design_fck=24, core_coeff=1.0),
         "inf 측정값 차단": calculate_strength([50] * 19 + [np.inf], angle=0, days=3000, design_fck=24, core_coeff=1.0),
@@ -1313,8 +1191,6 @@ def run_validation_tests():
     validation_details = {name: detail for name, (ok, detail) in validation_cases.items()}
     results.append(("TC5(입력값 검증)", tc5_pass, validation_details))
 
-
-    # ----- TC6: 공식 자동추천/수동선택 분리 검증 -----
     ok6a, res6a = calculate_strength([50] * 20, angle=0, days=3000, design_fck=24, selected_formulas=None, core_coeff=1.0)
     ok6b, res6b = calculate_strength([50] * 20, angle=0, days=3000, design_fck=40, selected_formulas=None, core_coeff=1.0)
     ok6c, res6c = calculate_strength([50] * 20, angle=0, days=3000, design_fck=24, selected_formulas=["KALIS"], core_coeff=1.0)
@@ -1333,7 +1209,6 @@ def run_validation_tests():
         "수동 미선택": res6d,
     }))
 
-    # ----- TC7: 측정점수 정책 명확화 검증 -----
     ok7a, res7a = calculate_strength([50] * 20, angle=0, days=3000, design_fck=24, core_coeff=1.0,
                                       point_count_policy=REBOUND_POINT_POLICY_EXACT_20)
     ok7b, res7b = calculate_strength([50] * 19, angle=0, days=3000, design_fck=24, core_coeff=1.0,
@@ -1367,13 +1242,6 @@ def run_validation_tests():
     return results
 
 
-# =========================================================
-# 2-2) pytest 자동 테스트 분리용 core 모듈 연동
-# =========================================================
-# v6부터 반발경도 계산/검증/파서 로직은 structural_safety_core_v6.py에서도
-# 동일하게 제공됩니다. 앱 파일만 단독 실행하는 기존 사용성은 유지하되,
-# core 모듈이 같은 폴더에 있으면 아래 순수 함수들을 core 버전으로 연결합니다.
-# 이렇게 하면 pytest가 검증하는 함수와 앱에서 실제 사용하는 함수가 같아집니다.
 try:
     from structural_safety_core_v6 import (  # type: ignore
         ALLOWED_REBOUND_ANGLES,
@@ -1410,9 +1278,8 @@ try:
 except ImportError as e:
     logger.warning("structural_safety_core_v6.py를 불러오지 못해 앱 내장 계산 함수를 사용합니다: %s", e)
 
-
 # =========================================================
-# 3. 메인 UI 구성
+# 3. 메인 UI 구성 (재설계)
 # =========================================================
 
 st.title("🏗️ 구조물 안전진단 통합 평가 Pro")
@@ -1540,20 +1407,11 @@ with tab2:
                 rot_val = st.radio("이미지 회전(반시계)", [0, 90, 180, 270], index=0, horizontal=True, key="img_rot")
 
             if img_file is not None:
-                # -------------------------------------------------
-                # OCR 재실행 방지
-                # -------------------------------------------------
-                # Streamlit은 위젯 값이 바뀔 때마다 전체 스크립트를 다시 실행합니다.
-                # 이미지가 그대로인데 재령/설계강도/Ct/공식 선택만 바뀌어도
-                # OCR이 반복 실행되지 않도록 이미지 조합별 처리 여부를 저장합니다.
-
                 file_bytes = None
                 file_hash = ""
                 file_size = getattr(img_file, "size", 0)
 
                 try:
-                    # name + size만으로는 같은 이름/같은 크기의 다른 이미지를 구분하기 어렵습니다.
-                    # 짧은 내용 해시를 signature에 포함해 stale OCR 결과 사용 위험을 줄입니다.
                     file_bytes = img_file.getvalue()
                     file_size = len(file_bytes)
                     file_hash = hashlib.blake2b(file_bytes, digest_size=8).hexdigest()
@@ -1580,7 +1438,6 @@ with tab2:
 
                 sig_changed = st.session_state.get("ocr_upload_sig") != upload_sig
 
-                # 이미지/회전/OCR 모드가 바뀐 경우 기존 OCR 상태를 초기화합니다.
                 if sig_changed:
                     st.session_state["ocr_upload_sig"] = upload_sig
                     st.session_state.pop("ocr_result", None)
@@ -1594,16 +1451,12 @@ with tab2:
                     help="이미지, 회전값, OCR 모드는 그대로 두고 숫자 인식만 다시 실행합니다."
                 )
 
-                # 이 이미지 조합에 대해 아직 OCR을 실행하지 않았거나,
-                # 사용자가 수동 재실행 버튼을 누른 경우에만 OCR을 실행합니다.
                 should_run_ocr = (
                     rerun_ocr
                     or st.session_state.get("ocr_processed_sig") != upload_sig
                 )
 
                 if should_run_ocr:
-                    # 성공/실패 여부와 관계없이 '이 이미지 조합은 OCR 시도 완료'로 기록합니다.
-                    # 그래야 OCR 실패 이미지도 Streamlit 재실행 때마다 반복 처리되지 않습니다.
                     st.session_state["ocr_processed_sig"] = upload_sig
 
                     with st.spinner("이미지 처리 및 숫자 인식 중..."):
@@ -1647,11 +1500,6 @@ with tab2:
                                     "숫자를 인식하지 못했습니다. 직접 입력해주세요."
                                 )
 
-                # -------------------------------------------------
-                # OCR 결과 표시
-                # -------------------------------------------------
-                # OCR을 방금 실행했든, 이전 결과를 재사용하든,
-                # 화면 표시는 이곳에서 한 번만 처리합니다.
                 recognized_text = st.session_state.get("ocr_result", "")
 
                 if recognized_text:
@@ -1663,7 +1511,7 @@ with tab2:
                         st.info(f"저장된 OCR 결과 사용 중 ({len(ocr_vals)}개): {recognized_text}")
 
                     if len(ocr_vals) != 20:
-                        st.warning("자동 인식값이 20개가 아닙니다. 아래 입력창에서 확인/수정 후 계산하세요.")
+                        st.warning("자동 인식값이 20개가 아닙니다. 아래 입력판에서 확인/수정 후 계산하세요.")
 
                 elif st.session_state.get("ocr_error"):
                     st.warning(st.session_state["ocr_error"])
@@ -1741,64 +1589,138 @@ with tab2:
                 else:
                     st.warning("직접 선택 모드에서는 평균 산정에 사용할 공식을 1개 이상 선택하세요.")
 
+            # ============ 측정값 입력판 (격자형 + 실시간 기각 미리보기) ============
+            GRID_COLS = 5  # 현장 측정 기록표와 동일한 5칸 가로 배열
+
             default_txt = "54 56 55 53 58 55 54 55 52 57 55 56 54 55 59 42 55 56 54 55"
-            if 'ocr_result' in st.session_state:
+            if st.session_state.get('ocr_result'):
                 default_txt = st.session_state['ocr_result']
 
-            txt = st.text_area(
-                "측정값 (자동 인식 결과 수정 가능)",
-                value=default_txt,
-                height=120 if mobile_client else 80,
-                help="여러 값은 공백, 줄바꿈, 쉼표로 구분할 수 있습니다. 소수점은 58.4처럼 점(.)을 사용하세요."
-            )
+            with st.expander("📋 텍스트로 붙여넣기 / 한 번에 수정", expanded=False):
+                pasted = st.text_area(
+                    "측정값 (공백·쉼표·줄바꿈으로 구분, 소수점은 58.4처럼 점 사용)",
+                    value=st.session_state.get('reb_src_txt', default_txt),
+                    height=90,
+                    key="reb_paste_area"
+                )
+                if st.button("⬇️ 위 텍스트를 격자에 채우기", use_container_width=True, key="reb_apply_paste"):
+                    st.session_state['reb_src_txt'] = pasted
+                    st.rerun()
 
-            # OCR/텍스트 결과를 표 편집 UI로 제공합니다.
-            # - 정확히 20개 정책: 20칸 고정
-            # - 20개 이상 허용 정책: 입력된 값 개수만큼 행을 표시하고, 20개보다 적으면 20칸 표시
-            preview_vals = parse_readings_text(txt)
+            source_txt = st.session_state.get('reb_src_txt', default_txt)
+            seed_vals = parse_readings_text(source_txt)
+
             if point_count_policy == REBOUND_POINT_POLICY_EXACT_20:
-                grid_row_count = 20
+                total_cells = 20
                 grid_num_rows = "fixed"
-                if len(preview_vals) > 20:
-                    st.warning("정확히 20개 정책에서는 입력값이 20개를 초과하면 첫 20개만 편집표에 반영됩니다. 추가값까지 쓰려면 [20개 이상 허용]을 선택하세요.")
+                if len(seed_vals) > 20:
+                    st.warning("‘정확히 20개’ 정책에서는 앞 20개만 격자에 반영됩니다. "
+                               "추가값까지 쓰려면 [20개 이상 허용]을 선택하세요.")
             else:
-                grid_row_count = max(20, len(preview_vals))
+                total_rows = max(4, math.ceil(max(20, len(seed_vals)) / GRID_COLS))
+                total_cells = total_rows * GRID_COLS
                 grid_num_rows = "dynamic"
 
-            base_vals = (preview_vals + [np.nan] * grid_row_count)[:grid_row_count]
-            grid_df = pd.DataFrame({
-                "No": list(range(1, grid_row_count + 1)),
-                "측정값": base_vals
-            })
-            grid_key = f"ocr_grid_{point_count_policy}_{grid_row_count}_{abs(hash(txt)) % (10**8)}"
+            padded = (list(seed_vals) + [np.nan] * total_cells)[:total_cells]
+            grid_rows = [padded[i:i + GRID_COLS] for i in range(0, total_cells, GRID_COLS)]
+            grid_cols = [f"{c + 1}열" for c in range(GRID_COLS)]
+            grid_df = pd.DataFrame(grid_rows, columns=grid_cols)
+
+            st.markdown("##### ✍️ 측정값 입력판  ·  가로 5칸 = 기록표와 동일 배열")
+            num_col_cfg = st.column_config.NumberColumn(
+                min_value=REBOUND_READING_MIN,
+                max_value=REBOUND_READING_MAX,
+                step=0.1,
+                format="%.1f",
+            )
             edited_grid = st.data_editor(
                 grid_df,
-                column_config={
-                    "No": st.column_config.NumberColumn("No", disabled=True),
-                    "측정값": st.column_config.NumberColumn("측정값", min_value=REBOUND_READING_MIN, max_value=REBOUND_READING_MAX, step=0.1),
-                },
+                column_config={c: num_col_cfg for c in grid_cols},
                 hide_index=True,
                 use_container_width=True,
                 num_rows=grid_num_rows,
-                key=grid_key
+                key=f"reb_grid_{point_count_policy}_{total_cells}_{abs(hash(source_txt)) % (10 ** 8)}"
             )
 
-            valid_grid_vals = [float(v) for v in edited_grid["측정값"].tolist() if not pd.isna(v)]
-            input_count = len(valid_grid_vals)
-            if point_count_policy == REBOUND_POINT_POLICY_EXACT_20:
-                if input_count == 20:
-                    st.success("측정값 20개가 입력되었습니다. 정확히 20개 정책 조건을 만족합니다.")
-                else:
-                    st.warning(f"현재 측정값 {input_count}개입니다. 정확히 20개 정책에서는 20개가 필요합니다.")
-            else:
-                if input_count >= 20:
-                    discard_limit_preview = get_discard_limit_for_policy(input_count, point_count_policy)
-                    st.success(f"측정값 {input_count}개가 입력되었습니다. 20개 이상 허용 정책 조건을 만족합니다. 현재 기각 무효 기준은 {discard_limit_preview}개 이상입니다.")
-                else:
-                    st.warning(f"현재 측정값 {input_count}개입니다. 20개 이상 허용 정책에서도 최소 20개가 필요합니다.")
+            ordered_vals = []
+            for _, grow in edited_grid.iterrows():
+                for c in edited_grid.columns:
+                    v = grow[c]
+                    if pd.notna(v):
+                        ordered_vals.append(float(v))
+            input_count = len(ordered_vals)
 
-            if valid_grid_vals:
-                txt = " ".join([str(int(v)) if abs(v - round(v)) < 1e-6 else f"{v:.1f}" for v in valid_grid_vals])
+            if input_count >= 1:
+                avg1 = float(np.mean(ordered_vals))
+                tol = 1e-12
+                low, high = avg1 * 0.8, avg1 * 1.2
+                outlier_flags = [not (low - tol <= v <= high + tol) for v in ordered_vals]
+                valid_vals = [v for v, o in zip(ordered_vals, outlier_flags) if not o]
+                discard_n = sum(outlier_flags)
+                eff_mean = float(np.mean(valid_vals)) if valid_vals else float('nan')
+                discard_limit = get_discard_limit_for_policy(max(input_count, 1), point_count_policy)
+
+                cells_html = ""
+                for v, is_out in zip(ordered_vals, outlier_flags):
+                    v_txt = f"{v:.0f}" if abs(v - round(v)) < 1e-6 else f"{v:.1f}"
+                    if is_out:
+                        cells_html += (
+                            "<div style='position:relative;padding:9px 0;text-align:center;"
+                            "font-size:17px;font-weight:600;font-variant-numeric:tabular-nums;"
+                            "background:rgba(214,40,40,0.14);border:1.5px solid #D62828;"
+                            "border-radius:8px;color:#D62828;'>"
+                            f"{v_txt}<span style='position:absolute;top:2px;right:5px;"
+                            "font-size:10px;'>⚠</span></div>"
+                        )
+                    else:
+                        cells_html += (
+                            "<div style='padding:9px 0;text-align:center;font-size:17px;"
+                            "font-weight:500;font-variant-numeric:tabular-nums;"
+                            "background:rgba(127,127,127,0.06);"
+                            "border:1px solid rgba(127,127,127,0.22);border-radius:8px;"
+                            f"color:inherit;'>{v_txt}</div>"
+                        )
+                st.markdown(
+                    f"<div style='display:grid;grid-template-columns:repeat({GRID_COLS},1fr);"
+                    f"gap:7px;margin:6px 0 14px;'>{cells_html}</div>",
+                    unsafe_allow_html=True,
+                )
+
+                s1, s2, s3, s4 = st.columns(4)
+                s1.metric("1차 평균", f"{avg1:.2f}")
+                s2.metric("±20% 기각밴드", f"{low:.1f}–{high:.1f}")
+                s3.metric("기각", f"{discard_n}개")
+                s4.metric("유효 평균 R", f"{eff_mean:.2f}" if valid_vals else "—")
+            else:
+                st.info("격자에 측정값을 입력하면 평균과 ±20% 기각밴드, 기각 개수가 실시간으로 표시됩니다.")
+                discard_n = 0
+                discard_limit = get_discard_limit_for_policy(20, point_count_policy)
+
+            if point_count_policy == REBOUND_POINT_POLICY_EXACT_20:
+                if input_count == 20 and discard_n < discard_limit:
+                    st.success("측정값 20개 입력 완료 — ‘정확히 20개’ 정책 조건을 만족합니다.")
+                elif input_count != 20:
+                    st.warning(f"현재 {input_count}개 — ‘정확히 20개’ 정책에서는 정확히 20개가 필요합니다.")
+                else:
+                    st.error(f"기각 {discard_n}개 (무효 기준 {discard_limit}개 이상) — "
+                             "이대로 계산하면 시험 무효입니다. 재타격을 권장합니다.")
+            else:
+                if input_count >= 20 and discard_n < discard_limit:
+                    st.success(f"측정값 {input_count}개 입력 — ‘20개 이상 허용’ 조건 만족 "
+                               f"(기각 무효 기준 {discard_limit}개 이상).")
+                elif input_count < 20:
+                    st.warning(f"현재 {input_count}개 — 최소 20개가 필요합니다.")
+                else:
+                    st.error(f"기각 {discard_n}개 (무효 기준 {discard_limit}개 이상) — "
+                             "이대로 계산하면 시험 무효입니다.")
+
+            if ordered_vals:
+                txt = " ".join(
+                    str(int(v)) if abs(v - round(v)) < 1e-6 else f"{v:.1f}"
+                    for v in ordered_vals
+                )
+            else:
+                txt = ""
 
         if st.button("계산 실행", type="primary", use_container_width=True):
             rd = parse_readings_text(txt)
@@ -1829,7 +1751,6 @@ with tab2:
                     "readings": rd,
                 }
                 st.session_state['last_rebound_error'] = None
-                # 새 계산 결과는 다시 통계 목록에 추가할 수 있도록 중복 방지 서명을 초기화
                 st.session_state['last_added_signature'] = None
                 st.session_state['last_add_message'] = None
                 st.session_state['add_point_name'] = f"P{len(st.session_state['rebound_records']) + 1}"
@@ -1839,12 +1760,6 @@ with tab2:
                 st.session_state['last_rebound_error'] = res
                 st.session_state['last_add_message'] = None
 
-        # ---------------------------------------------------------
-        # 최근 단일 계산 결과 표시 + 통계 분석 목록 추가
-        # 중요: 이 블록은 [계산 실행] 버튼 if문 밖에 있어야 합니다.
-        # 버튼 클릭 시 Streamlit이 전체 스크립트를 재실행하므로,
-        # 결과를 session_state에서 다시 불러와야 [통계 분석 목록에 추가]가 정상 동작합니다.
-        # ---------------------------------------------------------
         if st.session_state.get('last_rebound_error'):
             st.error(st.session_state['last_rebound_error'])
 
@@ -1865,7 +1780,40 @@ with tab2:
             )
             result_discard_rule = meta.get("discard_rule", res.get("Discard_Rule", ""))
 
-            st.success(f"평균 추정 압축강도(코어보정 반영): **{res['Mean_Strength']:.2f} MPa**")
+            # ----- 판정 카드 (합격/검토 필요) -----
+            mean_s = float(res['Mean_Strength'])
+            ratio = (mean_s / result_fck * 100.0) if result_fck else 0.0
+            is_pass = mean_s >= result_fck
+            if is_pass:
+                badge_txt, badge_icon = "합격 · 설계강도 충족", "✔"
+                accent, accent_bg = "#1B9E77", "rgba(27,158,119,0.14)"
+            else:
+                badge_txt, badge_icon = "검토 필요 · 설계강도 미달", "!"
+                accent, accent_bg = "#D62828", "rgba(214,40,40,0.14)"
+
+            st.markdown(
+                f"""
+                <div class="verdict-card">
+                  <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:16px;flex-wrap:wrap;">
+                    <div>
+                      <span class="verdict-badge" style="background:{accent_bg};color:{accent};">{badge_icon} {badge_txt}</span>
+                      <div class="verdict-sub">평균 추정 압축강도 (코어보정 반영)</div>
+                      <div style="display:flex;align-items:baseline;gap:8px;">
+                        <span class="verdict-num" style="color:{accent};">{mean_s:.2f}</span>
+                        <span style="font-size:20px;color:rgba(127,127,127,0.95);">MPa</span>
+                      </div>
+                    </div>
+                    <div style="text-align:right;">
+                      <div class="verdict-sub">설계강도 대비</div>
+                      <div style="font-size:30px;font-weight:700;font-variant-numeric:tabular-nums;">{ratio:.0f}<span style="font-size:16px;color:rgba(127,127,127,0.95);">%</span></div>
+                      <div class="verdict-sub" style="margin-top:4px;">설계 {result_fck:.0f} MPa</div>
+                    </div>
+                  </div>
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
+
             st.caption(f"측정점수 정책: {result_point_policy_label} / 기각 기준: {result_discard_rule}")
             st.caption(f"평균 산정 방식: {result_formula_mode} / 적용 공식: {', '.join(result_methods)}")
             st.caption("※ 아래 결과는 마지막으로 [계산 실행]을 누른 시점의 입력값 기준입니다. 입력값을 변경한 경우 다시 계산하세요.")
@@ -1881,13 +1829,9 @@ with tab2:
                 r5.metric("재령 계수 α", f"{res['Age_Coeff']:.2f}")
                 r6.metric("Ct", f"{res['Core_Coeff']:.2f}")
 
-            # 데이터 연동 버튼: 계산 버튼 밖에서 항상 렌더링
             add_col1, add_col2 = st.columns(2)
             with add_col1:
-                st.text_input(
-                    "지점명",
-                    key="add_point_name"
-                )
+                st.text_input("지점명", key="add_point_name")
             with add_col2:
                 st.button(
                     "➕ 통계 분석 목록에 추가",
@@ -1896,7 +1840,6 @@ with tab2:
                     on_click=add_current_rebound_to_stats
                 )
 
-            # 추가 결과 메시지 표시
             add_msg = st.session_state.get('last_add_message')
             if add_msg:
                 msg_type, msg_text = add_msg
@@ -1915,13 +1858,12 @@ with tab2:
             chart = alt.Chart(df_f).mark_bar().encode(
                 x=alt.X('공식', sort=None),
                 y='강도',
-                color=alt.condition(alt.datum.강도 >= result_fck, alt.value('#4D96FF'), alt.value('#FF6B6B'))
+                color=alt.condition(alt.datum.강도 >= result_fck, alt.value('#1B9E77'), alt.value('#D62828'))
             ).properties(height=350)
 
-            rule_chart = alt.Chart(pd.DataFrame({'y': [result_fck]})).mark_rule(color='red', strokeDash=[5, 3], size=2).encode(y='y')
+            rule_chart = alt.Chart(pd.DataFrame({'y': [result_fck]})).mark_rule(color='#D62828', strokeDash=[5, 3], size=2).encode(y='y')
             st.altair_chart(chart + rule_chart, use_container_width=True)
 
-            # ----- PDF 보고서 다운로드 -----
             with st.expander("📄 PDF 보고서 다운로드 (정밀안전점검 부록용)", expanded=False):
                 summary = {
                     "프로젝트명": meta.get("project_name", p_name),
@@ -1969,7 +1911,7 @@ with tab2:
 
     else:
         # ---------------------------------------------------------
-        # [수정 4] 배치(엑셀) 템플릿 + 파싱 + 계산에 Ct 반영
+        # 배치(엑셀) 템플릿 + 파싱 + 계산에 Ct 반영
         # ---------------------------------------------------------
         st.info("💡 엑셀 업로드 시 아래 양식을 다운로드하여 작성해주세요. (Ct 및 측정정책 컬럼 포함)")
 
@@ -2070,7 +2012,7 @@ with tab2:
                         ang_v,
                         age_v,
                         design_fck=fck_v,
-                        selected_formulas=None,      # 배치 모드는 자동 추천 로직
+                        selected_formulas=None,
                         core_coeff=ct_v,
                         require_20_points=True,
                         point_count_policy=policy_v
@@ -2211,7 +2153,6 @@ with tab3:
             total_life = (d_cover / rate_a) ** 2
             res_life = total_life - a_years
         else:
-            # 미탄산화 (m_depth=0) → 잔여수명 무한대로 간주
             total_life = float('inf')
             res_life = float('inf')
         grade, color = _carb_grade(rem)
@@ -2250,17 +2191,16 @@ with tab3:
                 y_steps = np.linspace(0, 100, 101)
                 d_steps = rate_a * np.sqrt(y_steps)
                 df_p = pd.DataFrame({'경과년수': y_steps, '탄산화깊이': d_steps})
-                line = alt.Chart(df_p).mark_line(color='#1f77b4').encode(
+                line = alt.Chart(df_p).mark_line(color='#0F5C6E').encode(
                     x=alt.X('경과년수', title='경과년수 (년)'),
                     y=alt.Y('탄산화깊이', title='탄산화 깊이 (mm)')
                 )
                 rule = alt.Chart(pd.DataFrame({'y': [d_cover]})).mark_rule(
-                    color='red', strokeDash=[5, 5], size=2).encode(y='y')
+                    color='#D62828', strokeDash=[5, 5], size=2).encode(y='y')
                 point = alt.Chart(pd.DataFrame({'x': [a_years], 'y': [m_depth]})).mark_point(
-                    color='orange', size=100, filled=True).encode(x='x', y='y')
+                    color='#F4A100', size=100, filled=True).encode(x='x', y='y')
                 st.altair_chart(line + rule + point, use_container_width=True)
 
-            # 탄산화 PDF
             with st.expander("📄 PDF 보고서 다운로드", expanded=False):
                 summary = {
                     "프로젝트명": p_name,
@@ -2285,7 +2225,6 @@ with tab3:
                     st.warning(str(e))
 
     else:
-        # ----- 탄산화 다중 지점 -----
         st.info("💡 시설물 1건당 보통 10~20개소 측정합니다. 양식을 받아 채워 업로드하세요.")
         carb_template = pd.DataFrame({
             "지점": ["P1-슬래브", "P2-기둥", "P3-벽체"],
@@ -2361,7 +2300,6 @@ with tab3:
                 df_carb_res = pd.DataFrame(res_rows)
                 st.dataframe(df_carb_res, use_container_width=True, hide_index=True)
 
-                # 등급 분포
                 if "등급" in df_carb_res.columns:
                     grade_counts = df_carb_res["등급"].value_counts().reset_index()
                     grade_counts.columns = ["등급", "건수"]
@@ -2376,7 +2314,6 @@ with tab3:
                         use_container_width=True
                     )
 
-                # 다운로드
                 st.divider()
                 cdc1, cdc2 = st.columns(2)
                 with cdc1:
@@ -2424,13 +2361,11 @@ with tab4:
         st.caption(f"현재 {len(st.session_state['rebound_records'])}개 지점 / "
                    f"수동 입력 데이터 {len(st.session_state['rebound_data'])}개")
 
-    # ----- 1) 지점별 공식 비교 모드 (rebound_records 기반) -----
     st.divider()
     st.markdown("### 📌 지점별 공식 비교 (자동 추천)")
 
     if st.session_state['rebound_records']:
         recs_df = pd.DataFrame(st.session_state['rebound_records'])
-        # 누적 데이터 편집 (지점 삭제 가능)
         recs_df.insert(0, "유지", True)
         edited_recs = st.data_editor(
             recs_df,
@@ -2454,7 +2389,6 @@ with tab4:
                 st.session_state['rebound_data'] = []
                 st.rerun()
 
-        # 공식별 통계
         formula_cols = [c for c in REBOUND_FORMULA_OPTIONS if c in edited_recs.columns]
         active_recs = edited_recs[edited_recs["유지"] == True]
 
@@ -2477,7 +2411,6 @@ with tab4:
 
             if stats_rows:
                 stats_df = pd.DataFrame(stats_rows).sort_values("변동계수CV(%)").reset_index(drop=True)
-                # 최저 CV = 추천 공식
                 best = stats_df.iloc[0]
                 worst = stats_df.iloc[-1]
 
@@ -2487,7 +2420,6 @@ with tab4:
                 st.caption(f"※ 변동계수가 가장 낮은 공식이 해당 시설물의 콘크리트 특성에 가장 일관된 결과를 보입니다. "
                            f"가장 부적합: {worst['공식']} (CV {worst['변동계수CV(%)']:.2f}%)")
 
-                # 설계강도별 권장 공식과의 일치 여부 안내
                 recommended_set = set(get_recommended_formulas(st_fck))
                 if best["공식"] not in recommended_set:
                     st.warning(f"⚠️ 자동 추천 공식({best['공식']})이 설계강도 {st_fck}MPa 기준 "
@@ -2496,19 +2428,17 @@ with tab4:
 
                 st.dataframe(stats_df, use_container_width=True, hide_index=True)
 
-                # 공식별 CV 차트
                 cv_chart = alt.Chart(stats_df).mark_bar().encode(
                     x=alt.X("공식:N", sort=stats_df["공식"].tolist()),
                     y=alt.Y("변동계수CV(%):Q"),
                     color=alt.condition(
                         alt.datum["공식"] == best["공식"],
-                        alt.value("#2ecc71"),
+                        alt.value("#1B9E77"),
                         alt.value("#95a5a6")
                     )
                 ).properties(height=280, title="공식별 변동계수 비교 (낮을수록 안정적)")
                 st.altair_chart(cv_chart, use_container_width=True)
 
-                # 지점별 공식 결과 분포
                 melted = active_recs.melt(id_vars=["지점"],
                                            value_vars=formula_cols,
                                            var_name="공식", value_name="강도")
@@ -2520,10 +2450,9 @@ with tab4:
                     tooltip=["지점", "공식", "강도"]
                 ).properties(height=300, title="지점별 공식 결과 분포")
                 fck_rule = alt.Chart(pd.DataFrame({"y": [st_fck]})).mark_rule(
-                    color="red", strokeDash=[5, 3]).encode(y="y")
+                    color="#D62828", strokeDash=[5, 3]).encode(y="y")
                 st.altair_chart(point_chart + fck_rule, use_container_width=True)
 
-                # 통계 PDF
                 with st.expander("📄 통계·비교 PDF 보고서 다운로드", expanded=False):
                     summary_st = {
                         "프로젝트명": p_name,
@@ -2551,7 +2480,6 @@ with tab4:
     else:
         st.info("⬅️ 먼저 '반발경도' 탭에서 단일 지점 평가를 수행하고 [통계 분석 목록에 추가] 버튼을 눌러주세요.")
 
-    # ----- 2) 수동 입력 강도 데이터 통계 (기존 호환) -----
     st.divider()
     with st.expander("📋 수동 입력 강도 데이터 통계 (간이 분석)", expanded=False):
         session_data_str = " ".join([f"{x:.1f}" for x in st.session_state['rebound_data']])
@@ -2580,9 +2508,9 @@ with tab4:
 
             chart = alt.Chart(pd.DataFrame({"번호": range(1, len(data) + 1), "강도": data})).mark_bar().encode(
                 x='번호:O', y='강도:Q',
-                color=alt.condition(alt.datum.강도 >= st_fck, alt.value('#4D96FF'), alt.value('#FF6B6B'))
+                color=alt.condition(alt.datum.강도 >= st_fck, alt.value('#1B9E77'), alt.value('#D62828'))
             )
-            rule = alt.Chart(pd.DataFrame({'y': [st_fck]})).mark_rule(color='red', strokeDash=[5, 3], size=2).encode(y='y')
+            rule = alt.Chart(pd.DataFrame({'y': [st_fck]})).mark_rule(color='#D62828', strokeDash=[5, 3], size=2).encode(y='y')
             st.altair_chart(chart + rule, use_container_width=True)
         elif parsed:
             st.warning("최소 2개 이상의 숫자가 필요합니다.")
