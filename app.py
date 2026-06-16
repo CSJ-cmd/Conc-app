@@ -327,6 +327,72 @@ def add_current_rebound_to_stats():
     st.session_state['add_point_name'] = f"P{len(st.session_state['rebound_records']) + 1}"
 
 
+def _format_reading_values(vals):
+    """측정값 리스트를 텍스트칸/격자 공통 표기(정수는 정수, 소수는 .1f)로 직렬화"""
+    return " ".join(
+        str(int(v)) if abs(v - round(v)) < 1e-6 else f"{v:.1f}"
+        for v in vals
+    )
+
+
+def _sync_text_to_grid():
+    """텍스트칸을 고치면 호출 — 캔버스 텍스트(reb_src_txt) 갱신 후 격자 시드 버전 증가."""
+    st.session_state['reb_src_txt'] = st.session_state.get('reb_paste_area', '')
+    st.session_state['reb_grid_ver'] = st.session_state.get('reb_grid_ver', 0) + 1
+
+
+def _sync_grid_to_text(grid_key, grid_cols):
+    """격자를 고치면 호출 — 편집 델타를 시드 행에 적용해 텍스트칸으로 역동기화.
+
+    셀 값 편집은 격자 버전을 올리지 않아(키 고정) 연속 입력 중 입력판이 리셋되지
+    않습니다. 행 추가/삭제(구조 변경)일 때만 버전을 올려 격자를 깨끗이 다시 시드합니다.
+    """
+    state = st.session_state.get(grid_key)
+    if not isinstance(state, dict):
+        return
+
+    base_rows = st.session_state.get('_reb_grid_base_rows', []) or []
+    rows = [list(r) for r in base_rows]
+
+    for ridx, changes in (state.get("edited_rows", {}) or {}).items():
+        try:
+            ridx = int(ridx)
+        except (TypeError, ValueError):
+            continue
+        if 0 <= ridx < len(rows):
+            for col, val in (changes or {}).items():
+                if col in grid_cols:
+                    rows[ridx][grid_cols.index(col)] = val
+
+    deleted = state.get("deleted_rows", []) or []
+    for ridx in sorted(deleted, reverse=True):
+        if 0 <= ridx < len(rows):
+            rows.pop(ridx)
+
+    added = state.get("added_rows", []) or []
+    for arow in added:
+        rows.append([(arow or {}).get(c) for c in grid_cols])
+
+    vals = []
+    for r in rows:
+        for v in r:
+            if v is None:
+                continue
+            try:
+                fv = float(v)
+            except (TypeError, ValueError):
+                continue
+            if math.isfinite(fv):
+                vals.append(fv)
+
+    new_txt = _format_reading_values(vals)
+    st.session_state['reb_src_txt'] = new_txt
+    st.session_state['reb_paste_area'] = new_txt
+
+    if deleted or added:
+        st.session_state['reb_grid_ver'] = st.session_state.get('reb_grid_ver', 0) + 1
+
+
 def is_mobile_client():
     """간단한 UA 기반 모바일/태블릿 판별"""
     try:
@@ -1466,7 +1532,7 @@ with tab2:
     mode = st.radio("입력 방식", ["단일 지점 (카메라/파일)", "다중 지점 (엑셀 업로드)"], horizontal=True)
 
     if mode.startswith("단일"):
-        with st.container(border=True):
+        with st.expander("🟦 1단계 · 측정값 확보 (촬영·OCR·붙여넣기)", expanded=True):
             st.markdown("##### 📸 측정값 입력")
 
             ocr_mode = st.radio(
@@ -1603,6 +1669,7 @@ with tab2:
                 elif st.session_state.get("ocr_error"):
                     st.warning(st.session_state["ocr_error"])
 
+        with st.expander("⚙️ 2단계 · 보정조건 (방향·재령·강도·Ct·정책·공식)", expanded=False):
             # ---- 입력 파라미터: 모바일은 단일 컬럼, 데스크톱은 4열 ----
             if mobile_client:
                 angle = st.selectbox(
@@ -1676,42 +1743,67 @@ with tab2:
                 else:
                     st.warning("직접 선택 모드에서는 평균 산정에 사용할 공식을 1개 이상 선택하세요.")
 
+        with st.expander("✍️ 3단계 · 측정값 격자 입력 (실시간 기각 확인)", expanded=False):
             # ============ 측정값 입력판 (격자형 + 실시간 기각 미리보기) ============
             GRID_COLS = 5  # 현장 측정 기록표와 동일한 5칸 가로 배열
 
             default_txt = "54 56 55 53 58 55 54 55 52 57 55 56 54 55 59 42 55 56 54 55"
-            if st.session_state.get('ocr_result'):
-                default_txt = st.session_state['ocr_result']
+
+            # [실시간 연동] 텍스트칸 ↔ 격자: 단일 상태(reb_src_txt) 기반 양방향 동기화 초기화
+            if 'reb_src_txt' not in st.session_state:
+                st.session_state['reb_src_txt'] = default_txt
+            if 'reb_paste_area' not in st.session_state:
+                st.session_state['reb_paste_area'] = st.session_state['reb_src_txt']
+            if 'reb_grid_ver' not in st.session_state:
+                st.session_state['reb_grid_ver'] = 0
+
+            # OCR 인식 결과가 새로 들어오면 텍스트칸·격자에 즉시 반영(중복 적용 방지)
+            _ocr_txt = st.session_state.get('ocr_result')
+            if _ocr_txt and st.session_state.get('reb_ocr_applied') != _ocr_txt:
+                st.session_state['reb_src_txt'] = _ocr_txt
+                st.session_state['reb_paste_area'] = _ocr_txt
+                st.session_state['reb_grid_ver'] = st.session_state.get('reb_grid_ver', 0) + 1
+                st.session_state['reb_ocr_applied'] = _ocr_txt
 
             with st.expander("📋 텍스트로 붙여넣기 / 한 번에 수정", expanded=False):
-                pasted = st.text_area(
+                st.text_area(
                     "측정값 (공백·쉼표·줄바꿈으로 구분, 소수점은 58.4처럼 점 사용)",
-                    value=st.session_state.get('reb_src_txt', default_txt),
                     height=90,
-                    key="reb_paste_area"
+                    key="reb_paste_area",
+                    on_change=_sync_text_to_grid,
+                    help="여기서 값을 고치면 아래 격자에 즉시 반영되고, 격자를 고치면 이 칸도 자동 갱신됩니다."
                 )
-                if st.button("⬇️ 위 텍스트를 격자에 채우기", use_container_width=True, key="reb_apply_paste"):
-                    st.session_state['reb_src_txt'] = pasted
-                    st.rerun()
+                st.caption("🔄 텍스트칸과 아래 격자가 실시간 양방향 동기화됩니다. (별도 버튼 불필요)")
 
             source_txt = st.session_state.get('reb_src_txt', default_txt)
             seed_vals = parse_readings_text(source_txt)
+            grid_ver = st.session_state.get('reb_grid_ver', 0)
 
-            if point_count_policy == REBOUND_POINT_POLICY_EXACT_20:
-                total_cells = 20
-                grid_num_rows = "fixed"
-                if len(seed_vals) > 20:
-                    st.warning("‘정확히 20개’ 정책에서는 앞 20개만 격자에 반영됩니다. "
-                               "추가값까지 쓰려면 [20개 이상 허용]을 선택하세요.")
-            else:
-                total_rows = max(4, math.ceil(max(20, len(seed_vals)) / GRID_COLS))
-                total_cells = total_rows * GRID_COLS
-                grid_num_rows = "dynamic"
+            # 격자 셀 개수는 버전·정책이 바뀔 때만 재계산 → 셀 편집 중에는 격자가 리셋되지 않음
+            _shape = st.session_state.get('_reb_grid_shape')
+            if (not isinstance(_shape, dict)) or _shape.get('ver') != grid_ver or _shape.get('policy') != point_count_policy:
+                if point_count_policy == REBOUND_POINT_POLICY_EXACT_20:
+                    _cells = 20
+                else:
+                    _rows = max(4, math.ceil(max(20, len(seed_vals)) / GRID_COLS))
+                    _cells = _rows * GRID_COLS
+                _shape = {'ver': grid_ver, 'policy': point_count_policy, 'cells': _cells}
+                st.session_state['_reb_grid_shape'] = _shape
+            total_cells = _shape['cells']
+            grid_num_rows = "fixed" if point_count_policy == REBOUND_POINT_POLICY_EXACT_20 else "dynamic"
+
+            if point_count_policy == REBOUND_POINT_POLICY_EXACT_20 and len(seed_vals) > 20:
+                st.warning("‘정확히 20개’ 정책에서는 앞 20개만 격자에 반영됩니다. "
+                           "추가값까지 쓰려면 [20개 이상 허용]을 선택하세요.")
 
             padded = (list(seed_vals) + [np.nan] * total_cells)[:total_cells]
             grid_rows = [padded[i:i + GRID_COLS] for i in range(0, total_cells, GRID_COLS)]
             grid_cols = [f"{c + 1}열" for c in range(GRID_COLS)]
             grid_df = pd.DataFrame(grid_rows, columns=grid_cols)
+
+            # 격자 변경 콜백이 편집 델타를 풀어내기 위한 기준(시드) 행 저장
+            st.session_state['_reb_grid_base_rows'] = grid_rows
+            grid_key = f"reb_grid_{point_count_policy}_{total_cells}_{grid_ver}"
 
             st.markdown("##### ✍️ 측정값 입력판  ·  가로 5칸 = 기록표와 동일 배열")
             num_col_cfg = st.column_config.NumberColumn(
@@ -1726,7 +1818,9 @@ with tab2:
                 hide_index=True,
                 use_container_width=True,
                 num_rows=grid_num_rows,
-                key=f"reb_grid_{point_count_policy}_{total_cells}_{hashlib.blake2b(source_txt.encode('utf-8'), digest_size=4).hexdigest()}"
+                key=grid_key,
+                on_change=_sync_grid_to_text,
+                kwargs={"grid_key": grid_key, "grid_cols": grid_cols},
             )
 
             ordered_vals = []
