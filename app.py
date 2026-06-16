@@ -1765,15 +1765,16 @@ with tab2:
                 st.session_state['reb_grid_ver'] = st.session_state.get('reb_grid_ver', 0) + 1
                 st.session_state['reb_ocr_applied'] = _ocr_txt
 
-            with st.expander("📋 텍스트로 붙여넣기 / 한 번에 수정", expanded=False):
-                st.text_area(
-                    "측정값 (공백·쉼표·줄바꿈으로 구분, 소수점은 58.4처럼 점 사용)",
-                    height=90,
-                    key="reb_paste_area",
-                    on_change=_sync_text_to_grid,
-                    help="여기서 값을 고치면 아래 격자에 즉시 반영되고, 격자를 고치면 이 칸도 자동 갱신됩니다."
-                )
-                st.caption("🔄 텍스트칸과 아래 격자가 실시간 양방향 동기화됩니다. (별도 버튼 불필요)")
+            # [중첩 expander 금지] 3단계 expander 안이므로 내부는 일반 블록으로 표시
+            st.markdown("###### 📋 텍스트로 붙여넣기 / 한 번에 수정")
+            st.text_area(
+                "측정값 (공백·쉼표·줄바꿈으로 구분, 소수점은 58.4처럼 점 사용)",
+                height=90,
+                key="reb_paste_area",
+                on_change=_sync_text_to_grid,
+                help="여기서 값을 고치면 아래 격자에 즉시 반영되고, 격자를 고치면 이 칸도 자동 갱신됩니다."
+            )
+            st.caption("🔄 텍스트칸과 아래 격자가 실시간 양방향 동기화됩니다. (별도 버튼 불필요)")
 
             source_txt = st.session_state.get('reb_src_txt', default_txt)
             seed_vals = parse_readings_text(source_txt)
