@@ -408,6 +408,8 @@ def is_mobile_client():
 ALLOWED_REBOUND_ANGLES = {-90, -45, 0, 45, 90}
 REBOUND_READING_MIN = 10.0
 REBOUND_READING_MAX = 100.0
+# 격자/텍스트칸 초기 예시값(상단 상수로 고정해 지역 변수 누락에 따른 NameError 방지)
+REBOUND_DEFAULT_GRID_TEXT = "54 56 55 53 58 55 54 55 52 57 55 56 54 55 59 42 55 56 54 55"
 REBOUND_FORMULA_OPTIONS = ["일본재료", "일본건축", "과기부", "권영웅", "KALIS"]
 REBOUND_FORMULA_NAMES = set(REBOUND_FORMULA_OPTIONS)
 REBOUND_FORMULA_RECOMMEND_THRESHOLD = 40.0
@@ -1532,7 +1534,7 @@ with tab2:
     mode = st.radio("입력 방식", ["단일 지점 (카메라/파일)", "다중 지점 (엑셀 업로드)"], horizontal=True)
 
     if mode.startswith("단일"):
-        with st.expander("🟦 1단계 · 측정값 확보 (촬영·OCR·붙여넣기)", expanded=False):
+        with st.expander("🟦 1단계 · 측정값 확보 (촬영·OCR·붙여넣기)", expanded=True):
             st.markdown("##### 📸 측정값 입력")
 
             ocr_mode = st.radio(
@@ -1708,7 +1710,7 @@ with tab2:
                 index=0,
                 horizontal=not mobile_client,
                 help=(
-                    "기본값은 20개입니다. 추가 측정값을 평균 산정에 포함해야 하는 경우에만 "
+                    "기본값은 정확히 20개입니다. 추가 측정값을 평균 산정에 포함해야 하는 경우에만 "
                     "20개 이상 허용을 선택하세요."
                 )
             )
@@ -1749,7 +1751,7 @@ with tab2:
 
             # [실시간 연동] 텍스트칸 ↔ 격자: 단일 상태(reb_src_txt) 기반 양방향 동기화 초기화
             if 'reb_src_txt' not in st.session_state:
-                st.session_state['reb_src_txt'] = default_txt
+                st.session_state['reb_src_txt'] = REBOUND_DEFAULT_GRID_TEXT
             if 'reb_paste_area' not in st.session_state:
                 st.session_state['reb_paste_area'] = st.session_state['reb_src_txt']
             if 'reb_grid_ver' not in st.session_state:
@@ -1774,7 +1776,7 @@ with tab2:
             )
             st.caption("🔄 텍스트칸과 아래 격자가 실시간 양방향 동기화됩니다. (별도 버튼 불필요)")
 
-            source_txt = st.session_state.get('reb_src_txt', default_txt)
+            source_txt = st.session_state.get('reb_src_txt', REBOUND_DEFAULT_GRID_TEXT)
             seed_vals = parse_readings_text(source_txt)
             grid_ver = st.session_state.get('reb_grid_ver', 0)
 
@@ -1792,7 +1794,7 @@ with tab2:
             grid_num_rows = "fixed" if point_count_policy == REBOUND_POINT_POLICY_EXACT_20 else "dynamic"
 
             if point_count_policy == REBOUND_POINT_POLICY_EXACT_20 and len(seed_vals) > 20:
-                st.warning("‘20개’ 정책에서는 앞 20개만 격자에 반영됩니다. "
+                st.warning("‘정확히 20개’ 정책에서는 앞 20개만 격자에 반영됩니다. "
                            "추가값까지 쓰려면 [20개 이상 허용]을 선택하세요.")
 
             padded = (list(seed_vals) + [np.nan] * total_cells)[:total_cells]
@@ -1878,9 +1880,9 @@ with tab2:
 
             if point_count_policy == REBOUND_POINT_POLICY_EXACT_20:
                 if input_count == 20 and discard_n < discard_limit:
-                    st.success("측정값 20개 입력 완료 — ‘20개’ 정책 조건을 만족합니다.")
+                    st.success("측정값 20개 입력 완료 — ‘정확히 20개’ 정책 조건을 만족합니다.")
                 elif input_count != 20:
-                    st.warning(f"현재 {input_count}개 — ‘20개’ 정책에서는 정확히 20개가 필요합니다.")
+                    st.warning(f"현재 {input_count}개 — ‘정확히 20개’ 정책에서는 정확히 20개가 필요합니다.")
                 else:
                     st.error(f"기각 {discard_n}개 (무효 기준 {discard_limit}개 이상) — "
                              "이대로 계산하면 시험 무효입니다. 재타격을 권장합니다.")
