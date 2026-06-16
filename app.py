@@ -1708,7 +1708,7 @@ with tab2:
                 index=0,
                 horizontal=not mobile_client,
                 help=(
-                    "기본값은 정확히 20개입니다. 추가 측정값을 평균 산정에 포함해야 하는 경우에만 "
+                    "기본값은 20개입니다. 추가 측정값을 평균 산정에 포함해야 하는 경우에만 "
                     "20개 이상 허용을 선택하세요."
                 )
             )
@@ -1746,8 +1746,6 @@ with tab2:
         with st.expander("✍️ 3단계 · 측정값 격자 입력 (실시간 기각 확인)", expanded=False):
             # ============ 측정값 입력판 (격자형 + 실시간 기각 미리보기) ============
             GRID_COLS = 5  # 현장 측정 기록표와 동일한 5칸 가로 배열
-
-            default_txt = "54 56 55 53 58 55 54 55 52 57 55 56 54 55 59 42 55 56 54 55"
 
             # [실시간 연동] 텍스트칸 ↔ 격자: 단일 상태(reb_src_txt) 기반 양방향 동기화 초기화
             if 'reb_src_txt' not in st.session_state:
@@ -1794,7 +1792,7 @@ with tab2:
             grid_num_rows = "fixed" if point_count_policy == REBOUND_POINT_POLICY_EXACT_20 else "dynamic"
 
             if point_count_policy == REBOUND_POINT_POLICY_EXACT_20 and len(seed_vals) > 20:
-                st.warning("‘정확히 20개’ 정책에서는 앞 20개만 격자에 반영됩니다. "
+                st.warning("‘20개’ 정책에서는 앞 20개만 격자에 반영됩니다. "
                            "추가값까지 쓰려면 [20개 이상 허용]을 선택하세요.")
 
             padded = (list(seed_vals) + [np.nan] * total_cells)[:total_cells]
@@ -1880,9 +1878,9 @@ with tab2:
 
             if point_count_policy == REBOUND_POINT_POLICY_EXACT_20:
                 if input_count == 20 and discard_n < discard_limit:
-                    st.success("측정값 20개 입력 완료 — ‘정확히 20개’ 정책 조건을 만족합니다.")
+                    st.success("측정값 20개 입력 완료 — ‘20개’ 정책 조건을 만족합니다.")
                 elif input_count != 20:
-                    st.warning(f"현재 {input_count}개 — ‘정확히 20개’ 정책에서는 정확히 20개가 필요합니다.")
+                    st.warning(f"현재 {input_count}개 — ‘20개’ 정책에서는 정확히 20개가 필요합니다.")
                 else:
                     st.error(f"기각 {discard_n}개 (무효 기준 {discard_limit}개 이상) — "
                              "이대로 계산하면 시험 무효입니다. 재타격을 권장합니다.")
