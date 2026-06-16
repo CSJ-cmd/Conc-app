@@ -1751,7 +1751,7 @@ with tab2:
 
             # [실시간 연동] 텍스트칸 ↔ 격자: 단일 상태(reb_src_txt) 기반 양방향 동기화 초기화
             if 'reb_src_txt' not in st.session_state:
-                st.session_state['reb_src_txt'] = REBOUND_DEFAULT_GRID_TEXT
+                st.session_state['reb_src_txt'] = ""   # 빈 값으로 시작 → 텍스트칸은 placeholder(예시)만 표시
             if 'reb_paste_area' not in st.session_state:
                 st.session_state['reb_paste_area'] = st.session_state['reb_src_txt']
             if 'reb_grid_ver' not in st.session_state:
@@ -1772,11 +1772,12 @@ with tab2:
                 height=90,
                 key="reb_paste_area",
                 on_change=_sync_text_to_grid,
+                placeholder=REBOUND_DEFAULT_GRID_TEXT,
                 help="여기서 값을 고치면 아래 격자에 즉시 반영되고, 격자를 고치면 이 칸도 자동 갱신됩니다."
             )
             st.caption("🔄 텍스트칸과 아래 격자가 실시간 양방향 동기화됩니다. (별도 버튼 불필요)")
 
-            source_txt = st.session_state.get('reb_src_txt', REBOUND_DEFAULT_GRID_TEXT)
+            source_txt = st.session_state.get('reb_src_txt', "")
             seed_vals = parse_readings_text(source_txt)
             grid_ver = st.session_state.get('reb_grid_ver', 0)
 
