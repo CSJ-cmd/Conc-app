@@ -1534,7 +1534,7 @@ with tab2:
     mode = st.radio("입력 방식", ["단일 지점 (카메라/파일)", "다중 지점 (엑셀 업로드)"], horizontal=True)
 
     if mode.startswith("단일"):
-        with st.expander("🟦 1단계 · 측정값 확보 (촬영·OCR·붙여넣기)", expanded=True):
+        with st.expander("🟦 1단계 · 측정값 확보 (촬영·OCR·붙여넣기)", expanded=False):
             st.markdown("##### 📸 측정값 입력")
 
             ocr_mode = st.radio(
