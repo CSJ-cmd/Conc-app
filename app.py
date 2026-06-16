@@ -7,6 +7,7 @@ import altair as alt
 import re
 import logging
 import hashlib
+import html
 from PIL import Image
 
 logger = logging.getLogger(__name__)
@@ -24,11 +25,23 @@ st.set_page_config(
 st.markdown("""
     <style>
     :root {
-        --brand: #0F5C6E;
-        --brand-deep: #0B4553;
-        --pass: #1B9E77;
-        --fail: #D62828;
-        --warn: #F4A100;
+        --primary: #0F4C81;
+        --primary-dark: #073763;
+        --action: #2563EB;
+        --success: #16A34A;
+        --warning: #F59E0B;
+        --danger: #DC2626;
+        --bg-soft: #F8FAFC;
+        --card: #FFFFFF;
+        --border: #E2E8F0;
+        --text-main: #0F172A;
+        --text-sub: #64748B;
+        /* 기존 인라인 클래스 호환용 별칭 */
+        --brand: #0F4C81;
+        --brand-deep: #073763;
+        --pass: #16A34A;
+        --fail: #DC2626;
+        --warn: #F59E0B;
     }
 
     .block-container {
@@ -37,103 +50,121 @@ st.markdown("""
         padding-left: 1rem !important;
         padding-right: 1rem !important;
         max-width: 100% !important;
+        background: linear-gradient(180deg, #F8FAFC 0%, #FFFFFF 42%) !important;
     }
 
-    /* 탭: 세그먼트형 + 브랜드색 활성 */
+    /* 탭: 세그먼트형 + 그라데이션 활성 */
     .stTabs [data-baseweb="tab-list"] {
-        gap: 6px;
-        overflow-x: auto;
-        white-space: nowrap;
-        scrollbar-width: none;
-        padding-left: 2px;
-        padding-bottom: 2px;
+        gap: 6px; overflow-x: auto; white-space: nowrap;
+        scrollbar-width: none; padding-left: 2px; padding-bottom: 2px;
     }
     .stTabs [data-baseweb="tab"] {
-        height: 46px;
-        padding: 6px 16px;
-        background-color: rgba(127,127,127,0.08);
-        border-radius: 10px 10px 0px 0px;
-        font-size: 14px;
-        font-weight: 500;
+        height: 46px; padding: 6px 16px;
+        background-color: #eef2f7; border-radius: 12px 12px 0 0;
+        font-size: 14px; font-weight: 600; color: #334155;
     }
     .stTabs [aria-selected="true"] {
-        background-color: var(--brand) !important;
+        background: linear-gradient(135deg, var(--primary) 0%, var(--action) 100%) !important;
         color: #ffffff !important;
     }
 
-    /* 버튼: 라운드 + 강조 */
-    .stButton > button {
-        border-radius: 10px;
-        font-weight: 600;
-    }
+    /* 버튼 */
+    .stButton > button { border-radius: 12px; font-weight: 700; }
     .stButton > button[kind="primary"] {
-        background-color: var(--brand);
-        border-color: var(--brand);
+        background: linear-gradient(135deg, var(--primary) 0%, var(--action) 100%);
+        border: none;
     }
-    .stButton > button[kind="primary"]:hover {
-        background-color: var(--brand-deep);
-        border-color: var(--brand-deep);
-    }
+    .stButton > button[kind="primary"]:hover { filter: brightness(0.94); }
 
     /* 메트릭 */
     [data-testid="stMetricValue"] { font-size: 1.2rem !important; word-break: break-all; }
     [data-testid="stMetricLabel"] { font-size: 0.85rem !important; }
 
-    /* 판정 카드 / 칩 (인라인 HTML에서 사용) */
-    .verdict-card {
-        border: 1px solid rgba(127,127,127,0.18);
-        border-radius: 14px;
-        padding: 18px 20px;
-        margin: 6px 0 14px;
-        background: rgba(127,127,127,0.04);
+    /* ===== 헤더 / 워크플로우 / 스텝 / 결과 / 추천 카드 ===== */
+    .app-hero {
+        padding: 18px 22px; margin: 0 0 16px 0;
+        border: 1px solid #dbeafe; border-left: 8px solid var(--primary);
+        border-radius: 18px;
+        background: linear-gradient(135deg, #ffffff 0%, #eff6ff 100%);
+        box-shadow: 0 10px 24px rgba(15, 76, 129, 0.08);
     }
-    .verdict-badge {
-        display: inline-flex; align-items: center; gap: 6px;
-        font-size: 13px; font-weight: 600;
-        padding: 5px 12px; border-radius: 8px; margin-bottom: 10px;
+    .app-hero-title { font-size: 1.75rem; font-weight: 900; color: var(--text-main); margin-bottom: 4px; letter-spacing: -0.02em; }
+    .app-hero-sub { font-size: 0.98rem; color: var(--text-sub); line-height: 1.55; }
+
+    .workflow-wrap {
+        display: flex; align-items: stretch; gap: 8px;
+        margin: 10px 0 18px 0; padding: 12px;
+        border: 1px solid #dbeafe; border-radius: 16px; background: #ffffff;
+        box-shadow: 0 6px 16px rgba(15, 76, 129, 0.05);
     }
+    .workflow-step {
+        flex: 1; text-align: center; padding: 10px 8px; border-radius: 12px;
+        border: 1px solid #d8e6f8; background: #f8fbff; color: #334155;
+        font-size: 0.88rem; line-height: 1.35; min-height: 58px;
+    }
+    .workflow-step b { font-size: 0.96rem; }
+    .workflow-step.active {
+        color: #ffffff; background: linear-gradient(135deg, var(--primary) 0%, var(--action) 100%);
+        border-color: var(--primary); box-shadow: 0 6px 14px rgba(37, 99, 235, 0.18);
+    }
+    .workflow-arrow { align-self: center; color: var(--primary); font-weight: 900; padding: 0 2px; }
+
+    .home-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; margin: 12px 0 18px 0; }
+    .home-card { background: var(--card); border: 1px solid var(--border); border-radius: 16px; padding: 16px 18px; box-shadow: 0 8px 18px rgba(15, 76, 129, 0.05); }
+    .home-card-title { color: var(--text-sub); font-size: 0.88rem; margin-bottom: 6px; }
+    .home-card-value { color: var(--text-main); font-size: 1.55rem; font-weight: 900; }
+    .home-card-sub { color: var(--text-sub); font-size: 0.82rem; margin-top: 4px; }
+
+    .step-title { margin: 10px 0; padding: 12px 14px; border-radius: 14px; border: 1px solid #dbeafe; background: linear-gradient(90deg, #eff6ff 0%, #ffffff 100%); }
+    .step-title b { color: var(--primary); font-size: 1.08rem; }
+    .step-title span { display: block; margin-top: 3px; color: var(--text-sub); font-size: 0.9rem; line-height: 1.5; }
+
+    .result-hero {
+        display: grid; grid-template-columns: 1.25fr 1fr 1fr; gap: 14px;
+        padding: 18px 20px; margin: 14px 0;
+        border: 1px solid var(--border); border-left: 8px solid var(--primary); border-radius: 18px;
+        background: #ffffff; box-shadow: 0 10px 24px rgba(15, 76, 129, 0.08);
+    }
+    .result-label { color: var(--text-sub); font-size: 0.88rem; margin-bottom: 6px; }
+    .result-value { color: var(--text-main); font-size: 1.75rem; font-weight: 900; letter-spacing: -0.02em; }
+    .result-grade { display: inline-flex; align-items: center; justify-content: center; color: white; font-weight: 900; padding: 8px 16px; border-radius: 999px; font-size: 1.05rem; min-width: 88px; }
+    .result-note { color: var(--text-sub); font-size: 0.82rem; margin-top: 6px; }
+
+    .recommend-card { background: linear-gradient(135deg, #ecfdf5 0%, #ffffff 100%); border: 1px solid #bbf7d0; border-left: 8px solid var(--success); border-radius: 18px; padding: 18px 20px; margin: 12px 0 18px 0; box-shadow: 0 8px 18px rgba(22, 163, 74, 0.08); }
+    .recommend-title { color: #166534; font-weight: 800; font-size: 0.95rem; }
+    .recommend-main { color: #14532d; font-size: 1.9rem; font-weight: 900; margin-top: 4px; }
+    .recommend-sub { color: #475569; font-size: 0.92rem; margin-top: 4px; line-height: 1.5; }
+
+    .download-panel { border: 1px solid var(--border); border-radius: 16px; background: #ffffff; padding: 14px; margin-top: 10px; }
+
+    /* 기존 판정/계산 박스 (호환 유지) */
+    .verdict-card { border: 1px solid rgba(127,127,127,0.18); border-radius: 14px; padding: 18px 20px; margin: 6px 0 14px; background: rgba(127,127,127,0.04); }
+    .verdict-badge { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; font-weight: 600; padding: 5px 12px; border-radius: 8px; margin-bottom: 10px; }
     .verdict-num { font-size: 50px; font-weight: 700; line-height: 1; font-variant-numeric: tabular-nums; }
     .verdict-sub { font-size: 13px; color: rgba(127,127,127,0.95); }
+    .calc-box { background-color: rgba(127,127,127,0.06); padding: 15px; border-radius: 10px; border-left: 5px solid var(--primary); margin-bottom: 15px; }
+    div[data-testid="stTable"] { overflow-x: auto; }
 
     /* expander 헤더 정렬 + 모바일 아이콘 텍스트 노출 보정 (기존 유지) */
     div[data-testid="stExpander"] details > summary {
-        list-style: none !important;
-        display: flex !important;
-        align-items: flex-start !important;
-        padding: 10px !important;
-        height: auto !important;
-        min-height: 40px;
-        border: 1px solid rgba(127,127,127,0.15);
-        border-radius: 10px;
-        padding-left: 12px !important;
+        list-style: none !important; display: flex !important; align-items: flex-start !important;
+        padding: 10px !important; height: auto !important; min-height: 40px;
+        border: 1px solid rgba(127,127,127,0.15); border-radius: 10px; padding-left: 12px !important;
     }
     div[data-testid="stExpander"] details > summary::-webkit-details-marker { display: none !important; }
-    div[data-testid="stExpander"] details > summary > svg {
-        margin-right: 12px !important;
-        margin-top: 3px !important;
-        width: 18px !important;
-        min-width: 18px !important;
-        height: 18px !important;
-        flex-shrink: 0 !important;
-        display: block !important;
-    }
+    div[data-testid="stExpander"] details > summary > svg { margin-right: 12px !important; margin-top: 3px !important; width: 18px !important; min-width: 18px !important; height: 18px !important; flex-shrink: 0 !important; display: block !important; }
     div[data-testid="stExpander"] details > summary [class*="material"],
     div[data-testid="stExpander"] details > summary [data-testid*="icon"],
-    div[data-testid="stExpander"] details > summary [aria-hidden="true"] {
-        display: none !important;
-    }
-    div[data-testid="stExpander"] details > summary p {
-        font-size: 15px;
-        font-weight: 600;
-        margin: 0;
-        line-height: 1.5;
-        white-space: normal !important;
-        word-break: keep-all;
-    }
+    div[data-testid="stExpander"] details > summary [aria-hidden="true"] { display: none !important; }
+    div[data-testid="stExpander"] details > summary p { font-size: 15px; font-weight: 600; margin: 0; line-height: 1.5; white-space: normal !important; word-break: keep-all; }
 
-    .calc-box { background-color: rgba(127,127,127,0.06); padding: 15px; border-radius: 10px; border-left: 5px solid var(--brand); margin-bottom: 15px; }
-    div[data-testid="stTable"] { overflow-x: auto; }
-
+    @media (max-width: 900px) {
+        .workflow-wrap { display: block; }
+        .workflow-step { margin-bottom: 8px; }
+        .workflow-arrow { text-align: center; padding: 2px 0; }
+        .home-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+        .result-hero { grid-template-columns: 1fr; }
+    }
     @media (max-width: 768px) {
         [data-testid="collapsedControl"] { display: none !important; }
         [data-testid="stHeader"] { height: 0 !important; }
@@ -141,8 +172,81 @@ st.markdown("""
         div[data-testid="stExpander"] details > summary { padding-left: 10px !important; }
         .verdict-num { font-size: 42px; }
     }
+    @media (max-width: 520px) {
+        .home-grid { grid-template-columns: 1fr; }
+        .app-hero-title { font-size: 1.35rem; }
+        .result-value { font-size: 1.45rem; }
+    }
     </style>
 """, unsafe_allow_html=True)
+
+
+# =========================================================
+# UI/UX 렌더링 헬퍼 (재설계 디자인)
+# =========================================================
+def _safe_html(value):
+    """HTML 렌더링용 문자열 이스케이프"""
+    return html.escape(str(value), quote=True)
+
+
+def render_app_header(project_name):
+    st.markdown(
+        f"""
+        <div class="app-hero">
+            <div class="app-hero-title">\U0001F3D7\uFE0F 구조물 안전진단 통합 평가 Pro</div>
+            <div class="app-hero-sub">
+                프로젝트: <b>{_safe_html(project_name)}</b> · 반발경도 입력, 보정계산, 통계 비교, PDF/Excel 출력까지 한 화면에서 처리합니다.
+            </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+def render_workflow_header(active_index=0):
+    steps = [
+        ("1", "프로젝트", "점검 정보 확인"),
+        ("2", "측정값 입력", "Rawdata 확인"),
+        ("3", "보정조건", "방향·재령·Ct"),
+        ("4", "자동 계산", "강도·공식 산정"),
+        ("5", "후속 작업", "통계·보고서"),
+    ]
+    parts = []
+    for idx, (num, title, sub) in enumerate(steps):
+        cls = "workflow-step active" if idx <= active_index else "workflow-step"
+        parts.append(f'<div class="{cls}">{num}<br><b>{title}</b><br><small>{sub}</small></div>')
+        if idx != len(steps) - 1:
+            parts.append('<div class="workflow-arrow">\u2192</div>')
+    st.markdown(f'<div class="workflow-wrap">{"".join(parts)}</div>', unsafe_allow_html=True)
+
+
+def render_step_heading(title, description=""):
+    st.markdown(
+        f"""
+        <div class="step-title">
+            <b>{_safe_html(title)}</b>
+            <span>{_safe_html(description)}</span>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+def get_strength_review(mean_strength, design_fck):
+    """설계강도 대비율 기준 참고 검토 등급. 최종 판정은 책임기술자 검토 대상."""
+    try:
+        mean_strength = float(mean_strength)
+        design_fck = float(design_fck)
+        ratio = mean_strength / design_fck * 100 if design_fck > 0 else np.nan
+    except Exception:
+        ratio = np.nan
+    if not np.isfinite(ratio):
+        return "검토 필요", "#64748B", "설계강도 기준을 확인하세요.", ratio
+    if ratio >= 100:
+        return "양호", "#16A34A", "설계기준강도 이상으로 추정됩니다.", ratio
+    if ratio >= 85:
+        return "주의", "#F59E0B", "설계강도에 근접하므로 추가 검토가 권장됩니다.", ratio
+    return "검토 필요", "#DC2626", "설계강도 대비 낮은 값으로 정밀 검토가 필요합니다.", ratio
 
 # 세션 상태 초기화 (데이터 연동용)
 if 'rebound_data' not in st.session_state:
@@ -763,6 +867,14 @@ def extract_numbers_from_image(image_input, ocr_mode="정밀"):
 
         return _format_readings_for_text(best_values)
 
+    except ImportError as e:
+        # [수정 #2] easyocr / opencv-python 등 OCR 의존성 미설치를 일반 오류와 분리.
+        # 로그만 봐도 '라이브러리 누락'인지 '이미지 처리 실패'인지 즉시 구분됩니다.
+        logger.error(
+            "OCR 의존성 미설치로 숫자 인식을 건너뜁니다 "
+            "(pip install easyocr opencv-python-headless): %s", e
+        )
+        return ""
     except Exception as e:
         logger.exception("OCR 처리 중 오류 발생: %s", e)
         return ""
@@ -1039,7 +1151,7 @@ def generate_pdf_report(project_name, report_type, summary_dict, detail_df=None,
     t.setStyle(TableStyle([
         ('FONTNAME', (0, 0), (-1, -1), font_name),
         ('FONTSIZE', (0, 0), (-1, -1), 9),
-        ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor("#0F5C6E")),
+        ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor("#0F4C81")),
         ('TEXTCOLOR', (0, 0), (-1, 0), colors.white),
         ('GRID', (0, 0), (-1, -1), 0.4, colors.grey),
         ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
@@ -1242,53 +1354,24 @@ def run_validation_tests():
     return results
 
 
-try:
-    from structural_safety_core_v6 import (  # type: ignore
-        ALLOWED_REBOUND_ANGLES,
-        REBOUND_READING_MIN,
-        REBOUND_READING_MAX,
-        REBOUND_FORMULA_OPTIONS,
-        REBOUND_FORMULA_NAMES,
-        REBOUND_FORMULA_RECOMMEND_THRESHOLD,
-        REBOUND_POINT_POLICY_EXACT_20,
-        REBOUND_POINT_POLICY_MIN_20,
-        REBOUND_POINT_POLICY_NO_MINIMUM,
-        DEFAULT_REBOUND_POINT_POLICY,
-        REBOUND_DISCARD_COUNT_LIMIT_20,
-        REBOUND_DISCARD_RATIO_LIMIT,
-        REBOUND_POINT_POLICY_OPTIONS,
-        REBOUND_POINT_POLICY_LABEL_TO_KEY,
-        normalize_rebound_point_policy,
-        get_rebound_point_policy_label,
-        get_rebound_point_policy_description,
-        get_rebound_point_policy_short_label,
-        get_discard_limit_for_policy,
-        get_recommended_formulas,
-        get_recommended_formula_description,
-        _normalize_ocr_token,
-        _normalize_manual_reading_text,
-        parse_readings_text,
-        parse_ocr_readings_text,
-        validate_rebound_inputs,
-        get_angle_correction,
-        get_age_coefficient,
-        calculate_strength,
-        run_validation_tests,
-    )
-except ImportError as e:
-    logger.warning("structural_safety_core_v6.py를 불러오지 못해 앱 내장 계산 함수를 사용합니다: %s", e)
+# [수정 #1] 외부 모듈(structural_safety_core_v6)에서 같은 이름들을 다시 import 해
+# 위에서 정의한 계산 함수/상수를 통째로 덮어쓰던 블록을 제거했습니다.
+# 이 파일에 정의된 함수가 유일한 '진실의 원천(single source of truth)'입니다.
+# → 화면에 보이는 코드와 실제 실행되는 계산식이 항상 일치합니다.
+# 만약 계산 로직을 별도 모듈로 분리하려면, 이 파일의 중복 정의를 지우고
+# 그때 import 블록을 다시 추가하세요(둘을 동시에 두지 마세요).
 
 # =========================================================
 # 3. 메인 UI 구성 (재설계)
 # =========================================================
-
-st.title("🏗️ 구조물 안전진단 통합 평가 Pro")
 
 with st.sidebar:
     st.header("⚙️ 프로젝트 정보")
     p_name = st.text_input("프로젝트명", "OO시설물 정밀점검")
     st.divider()
     st.caption("시설물안전법 및 세부지침 준수")
+
+render_app_header(p_name)
 
 tab1, tab2, tab3, tab4 = st.tabs(["📖 점검 매뉴얼", "🔨 반발경도", "🧪 탄산화", "📈 통계·비교"])
 
@@ -1370,7 +1453,11 @@ with tab1:
 # [Tab 2] 반발경도 평가
 # ---------------------------------------------------------
 with tab2:
-    st.subheader("🔨 반발경도 정밀 강도 산정")
+    render_step_heading(
+        "🔨 반발경도 정밀 강도 산정",
+        "측정값 입력 → 보정조건(방향·재령·Ct) → 자동 계산 → 통계·보고서 순으로 진행합니다."
+    )
+    render_workflow_header(active_index=(4 if st.session_state.get('last_rebound_result') else 1))
 
     mobile_client = is_mobile_client()
     if mobile_client:
@@ -1523,8 +1610,8 @@ with tab2:
                     [90, 45, 0, -45, -90],
                     format_func=lambda x: {90: "+90°(상향수직)", 45: "+45°(상향경사)", 0: "0°(수평)", -45: "-45°(하향경사)", -90: "-90°(하향수직)"}[x]
                 )
-                days = st.number_input("재령(일)", 10, 10000, 3000,
-                                      help="공용연수(년) × 365 + 양생기간. 미입력 시 3000일(약 8년) 적용")
+                days = st.number_input("재령(일)", 1, 10000, 3000,
+                                      help="공용연수(년) × 365 + 양생기간. 기본 3000일(약 8년) 적용")
                 fck = st.number_input("설계강도(MPa)", 15.0, 100.0, 24.0)
                 ct = st.number_input("코어 보정계수 Ct", 0.10, 2.00, 1.00, step=0.01)
             else:
@@ -1536,8 +1623,8 @@ with tab2:
                         format_func=lambda x: {90: "+90°(상향수직)", 45: "+45°(상향경사)", 0: "0°(수평)", -45: "-45°(하향경사)", -90: "-90°(하향수직)"}[x]
                     )
                 with c2:
-                    days = st.number_input("재령(일)", 10, 10000, 3000,
-                                          help="공용연수(년) × 365 + 양생기간. 미입력 시 3000일(약 8년) 적용")
+                    days = st.number_input("재령(일)", 1, 10000, 3000,
+                                          help="공용연수(년) × 365 + 양생기간. 기본 3000일(약 8년) 적용")
                 with c3:
                     fck = st.number_input("설계강도(MPa)", 15.0, 100.0, 24.0)
                 with c4:
@@ -1639,7 +1726,7 @@ with tab2:
                 hide_index=True,
                 use_container_width=True,
                 num_rows=grid_num_rows,
-                key=f"reb_grid_{point_count_policy}_{total_cells}_{abs(hash(source_txt)) % (10 ** 8)}"
+                key=f"reb_grid_{point_count_policy}_{total_cells}_{hashlib.blake2b(source_txt.encode('utf-8'), digest_size=4).hexdigest()}"
             )
 
             ordered_vals = []
@@ -1780,34 +1867,28 @@ with tab2:
             )
             result_discard_rule = meta.get("discard_rule", res.get("Discard_Rule", ""))
 
-            # ----- 판정 카드 (합격/검토 필요) -----
+            # ----- 결과 카드 (result-hero + 참고 검토등급) -----
             mean_s = float(res['Mean_Strength'])
-            ratio = (mean_s / result_fck * 100.0) if result_fck else 0.0
-            is_pass = mean_s >= result_fck
-            if is_pass:
-                badge_txt, badge_icon = "합격 · 설계강도 충족", "✔"
-                accent, accent_bg = "#1B9E77", "rgba(27,158,119,0.14)"
-            else:
-                badge_txt, badge_icon = "검토 필요 · 설계강도 미달", "!"
-                accent, accent_bg = "#D62828", "rgba(214,40,40,0.14)"
+            grade, grade_color, grade_msg, ratio = get_strength_review(mean_s, result_fck)
+            if not np.isfinite(ratio):
+                ratio = 0.0
 
             st.markdown(
                 f"""
-                <div class="verdict-card">
-                  <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:16px;flex-wrap:wrap;">
-                    <div>
-                      <span class="verdict-badge" style="background:{accent_bg};color:{accent};">{badge_icon} {badge_txt}</span>
-                      <div class="verdict-sub">평균 추정 압축강도 (코어보정 반영)</div>
-                      <div style="display:flex;align-items:baseline;gap:8px;">
-                        <span class="verdict-num" style="color:{accent};">{mean_s:.2f}</span>
-                        <span style="font-size:20px;color:rgba(127,127,127,0.95);">MPa</span>
-                      </div>
-                    </div>
-                    <div style="text-align:right;">
-                      <div class="verdict-sub">설계강도 대비</div>
-                      <div style="font-size:30px;font-weight:700;font-variant-numeric:tabular-nums;">{ratio:.0f}<span style="font-size:16px;color:rgba(127,127,127,0.95);">%</span></div>
-                      <div class="verdict-sub" style="margin-top:4px;">설계 {result_fck:.0f} MPa</div>
-                    </div>
+                <div class="result-hero">
+                  <div>
+                    <div class="result-label">평균 추정 압축강도 (코어보정 반영)</div>
+                    <div class="result-value" style="color:{grade_color};">{mean_s:.2f} <span style="font-size:1rem;color:var(--text-sub);font-weight:700;">MPa</span></div>
+                    <div class="result-note">{_safe_html(grade_msg)}</div>
+                  </div>
+                  <div>
+                    <div class="result-label">설계강도 대비</div>
+                    <div class="result-value">{ratio:.0f}<span style="font-size:1rem;color:var(--text-sub);font-weight:700;">%</span></div>
+                    <div class="result-note">설계 {result_fck:.0f} MPa</div>
+                  </div>
+                  <div style="display:flex;flex-direction:column;align-items:flex-start;justify-content:center;gap:8px;">
+                    <div class="result-label">참고 검토등급</div>
+                    <span class="result-grade" style="background:{grade_color};">{_safe_html(grade)}</span>
                   </div>
                 </div>
                 """,
@@ -1960,6 +2041,10 @@ with tab2:
                     df_up = pd.read_csv(uploaded_file)
                 else:
                     df_up = pd.read_excel(uploaded_file)
+
+                # [수정 #7] 헤더 앞뒤 공백 제거 → "설계 "처럼 공백이 낀 컬럼명도 정상 인식.
+                # 공백 때문에 값이 조용히 기본값으로 둔갑하는 '조용한 오답'을 방지합니다.
+                df_up.columns = df_up.columns.astype(str).str.strip()
 
                 for idx, row in df_up.iterrows():
                     try:
@@ -2203,7 +2288,7 @@ with tab3:
                 y_steps = np.linspace(0, 100, 101)
                 d_steps = rate_a * np.sqrt(y_steps)
                 df_p = pd.DataFrame({'경과년수': y_steps, '탄산화깊이': d_steps})
-                line = alt.Chart(df_p).mark_line(color='#0F5C6E').encode(
+                line = alt.Chart(df_p).mark_line(color='#0F4C81').encode(
                     x=alt.X('경과년수', title='경과년수 (년)'),
                     y=alt.Y('탄산화깊이', title='탄산화 깊이 (mm)')
                 )
@@ -2260,6 +2345,8 @@ with tab3:
                     df_c = pd.read_csv(carb_file)
                 else:
                     df_c = pd.read_excel(carb_file)
+                # [수정 #7] 헤더 앞뒤 공백 제거 → 컬럼명 공백으로 인한 기본값 둔갑 방지
+                df_c.columns = df_c.columns.astype(str).str.strip()
                 for idx, row in df_c.iterrows():
                     carb_init.append({
                         "선택": True,
@@ -2426,9 +2513,16 @@ with tab4:
                 best = stats_df.iloc[0]
                 worst = stats_df.iloc[-1]
 
-                st.success(f"✅ **추천 공식: {best['공식']}** "
-                           f"(CV = {best['변동계수CV(%)']:.2f}%, 평균 {best['평균(MPa)']:.2f} MPa, "
-                           f"강도비 {best['강도비(%)']:.1f}%)")
+                st.markdown(
+                    f"""
+                    <div class="recommend-card">
+                      <div class="recommend-title">✅ 자동 추천 공식 · 변동계수(CV) 최저</div>
+                      <div class="recommend-main">{_safe_html(str(best['공식']))}</div>
+                      <div class="recommend-sub">CV {best['변동계수CV(%)']:.2f}% · 평균 {best['평균(MPa)']:.2f} MPa · 강도비 {best['강도비(%)']:.1f}%</div>
+                    </div>
+                    """,
+                    unsafe_allow_html=True,
+                )
                 st.caption(f"※ 변동계수가 가장 낮은 공식이 해당 시설물의 콘크리트 특성에 가장 일관된 결과를 보입니다. "
                            f"가장 부적합: {worst['공식']} (CV {worst['변동계수CV(%)']:.2f}%)")
 
@@ -2526,4 +2620,3 @@ with tab4:
             st.altair_chart(chart + rule, use_container_width=True)
         elif parsed:
             st.warning("최소 2개 이상의 숫자가 필요합니다.")
-
