@@ -1523,7 +1523,7 @@ with tab1:
 with tab2:
     render_step_heading(
         "🔨 반발경도 정밀 강도 산정",
-        "측정값 입력 → 보정조건(방향·재령·Ct) → 자동 계산 → 통계·보고서 순으로 진행합니다."
+        "측정값 입력 → 보정조건(타격방향·재령·설계기준강도) → 자동 계산 → 통계·보고서 순으로 진행합니다."
     )
     render_workflow_header(active_index=(4 if st.session_state.get('last_rebound_result') else 1))
 
@@ -1534,7 +1534,7 @@ with tab2:
     mode = st.radio("입력 방식", ["단일 지점 (카메라/파일)", "다중 지점 (엑셀 업로드)"], horizontal=True)
 
     if mode.startswith("단일"):
-        with st.expander("🟦 1단계 · 측정값 확보 (촬영·OCR·붙여넣기)", expanded=True):
+        with st.expander("🟦 1단계 · 측정값 확보 (촬영·OCR·붙여넣기)", expanded=False):
             st.markdown("##### 📸 측정값 입력")
 
             ocr_mode = st.radio(
@@ -1671,7 +1671,7 @@ with tab2:
                 elif st.session_state.get("ocr_error"):
                     st.warning(st.session_state["ocr_error"])
 
-        with st.expander("⚙️ 2단계 · 보정조건 (방향·재령·강도·Ct·정책·공식)", expanded=True):
+        with st.expander("⚙️ 2단계 · 보정조건 (방향·재령·강도·정책·공식)", expanded=True):
             # ---- 입력 파라미터: 모바일은 단일 컬럼, 데스크톱은 4열 ----
             if mobile_client:
                 angle = st.selectbox(
@@ -1710,7 +1710,7 @@ with tab2:
                 index=0,
                 horizontal=not mobile_client,
                 help=(
-                    "기본값은 정확히 20개입니다. 추가 측정값을 평균 산정에 포함해야 하는 경우에만 "
+                    "기본값은 20개입니다. 추가 측정값을 평균 산정에 포함해야 하는 경우에만 "
                     "20개 이상 허용을 선택하세요."
                 )
             )
@@ -1795,7 +1795,7 @@ with tab2:
             grid_num_rows = "fixed" if point_count_policy == REBOUND_POINT_POLICY_EXACT_20 else "dynamic"
 
             if point_count_policy == REBOUND_POINT_POLICY_EXACT_20 and len(seed_vals) > 20:
-                st.warning("‘정확히 20개’ 정책에서는 앞 20개만 격자에 반영됩니다. "
+                st.warning("‘20개’ 정책에서는 앞 20개만 격자에 반영됩니다. "
                            "추가값까지 쓰려면 [20개 이상 허용]을 선택하세요.")
 
             padded = (list(seed_vals) + [np.nan] * total_cells)[:total_cells]
@@ -1881,9 +1881,9 @@ with tab2:
 
             if point_count_policy == REBOUND_POINT_POLICY_EXACT_20:
                 if input_count == 20 and discard_n < discard_limit:
-                    st.success("측정값 20개 입력 완료 — ‘정확히 20개’ 정책 조건을 만족합니다.")
+                    st.success("측정값 20개 입력 완료 — ‘20개’ 정책 조건을 만족합니다.")
                 elif input_count != 20:
-                    st.warning(f"현재 {input_count}개 — ‘정확히 20개’ 정책에서는 정확히 20개가 필요합니다.")
+                    st.warning(f"현재 {input_count}개 — ‘20개’ 정책에서는 정확히 20개가 필요합니다.")
                 else:
                     st.error(f"기각 {discard_n}개 (무효 기준 {discard_limit}개 이상) — "
                              "이대로 계산하면 시험 무효입니다. 재타격을 권장합니다.")
