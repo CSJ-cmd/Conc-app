@@ -1710,7 +1710,7 @@ with tab2:
                 index=0,
                 horizontal=not mobile_client,
                 help=(
-                    "기본값은 정확히 20개입니다. 추가 측정값을 평균 산정에 포함해야 하는 경우에만 "
+                    "기본값은 20개입니다. 추가 측정값을 평균 산정에 포함해야 하는 경우에만 "
                     "20개 이상 허용을 선택하세요."
                 )
             )
@@ -1794,7 +1794,7 @@ with tab2:
             grid_num_rows = "fixed" if point_count_policy == REBOUND_POINT_POLICY_EXACT_20 else "dynamic"
 
             if point_count_policy == REBOUND_POINT_POLICY_EXACT_20 and len(seed_vals) > 20:
-                st.warning("‘정확히 20개’ 정책에서는 앞 20개만 격자에 반영됩니다. "
+                st.warning("‘20개’ 정책에서는 앞 20개만 격자에 반영됩니다. "
                            "추가값까지 쓰려면 [20개 이상 허용]을 선택하세요.")
 
             padded = (list(seed_vals) + [np.nan] * total_cells)[:total_cells]
@@ -1880,9 +1880,9 @@ with tab2:
 
             if point_count_policy == REBOUND_POINT_POLICY_EXACT_20:
                 if input_count == 20 and discard_n < discard_limit:
-                    st.success("측정값 20개 입력 완료 — ‘정확히 20개’ 정책 조건을 만족합니다.")
+                    st.success("측정값 20개 입력 완료 — ‘20개’ 정책 조건을 만족합니다.")
                 elif input_count != 20:
-                    st.warning(f"현재 {input_count}개 — ‘정확히 20개’ 정책에서는 정확히 20개가 필요합니다.")
+                    st.warning(f"현재 {input_count}개 — ‘20개’ 정책에서는 정확히 20개가 필요합니다.")
                 else:
                     st.error(f"기각 {discard_n}개 (무효 기준 {discard_limit}개 이상) — "
                              "이대로 계산하면 시험 무효입니다. 재타격을 권장합니다.")
@@ -2177,7 +2177,7 @@ with tab2:
                         REBOUND_POINT_POLICY_OPTIONS[REBOUND_POINT_POLICY_MIN_20]["short_label"],
                     ],
                     required=True,
-                    help="정확히20: 20개가 아니면 무효 / 20개이상: 20개 초과 입력 허용, 기각률 20% 이상 무효"
+                    help="20: 20개가 아니면 무효 / 20개이상: 20개 초과 입력 허용, 기각률 20% 이상 무효"
                 ),
             },
             use_container_width=True,
