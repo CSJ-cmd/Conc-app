@@ -2341,11 +2341,16 @@ with tab3:
         else:
             return "D", "red"
 
-    def _carb_evaluate(m_depth, d_cover, a_years):
+    def _carb_evaluate(m_depth, d_cover, a_years, cover_real=None):
+        """[수정 B] 잔여피복·잔존수명은 '실측 피복' 기준으로 산정한다.
+        세부지침 및 실제 점검보고서가 실측 피복을 사용하며,
+        구축된 이력 DB 319행에서 (잔여 = 실측피복 − 깊이)가 전수 일치함을 확인.
+        cover_real 미입력 시에는 기존 동작(설계 피복)과 동일하게 대체한다."""
+        cover_eff = float(cover_real) if cover_real else float(d_cover)
         rate_a = m_depth / math.sqrt(a_years) if a_years > 0 else 0
-        rem = d_cover - m_depth
+        rem = cover_eff - m_depth
         if rate_a > 0:
-            total_life = (d_cover / rate_a) ** 2
+            total_life = (cover_eff / rate_a) ** 2
             res_life = total_life - a_years
         else:
             total_life = float('inf')
@@ -2353,19 +2358,37 @@ with tab3:
         grade, color = _carb_grade(rem)
         return rate_a, rem, total_life, res_life, grade, color
 
+    def _fmt_life(res_life):
+        """잔존수명 표기 — 보고서 관행에 맞춰 100년 초과는 '100년 이상'"""
+        if res_life == float('inf'):
+            return "∞"
+        if res_life >= 100:
+            return "100년 이상"
+        return f"{max(0, res_life):.1f} 년"
+
     if carb_mode == "단일 지점":
         with st.container(border=True):
-            c1, c2, c3 = st.columns(3)
+            c1, c2, c3, c4 = st.columns(4)
             with c1:
                 m_depth = st.number_input("측정 깊이(mm)", 0.0, 100.0, 12.0)
             with c2:
                 d_cover = st.number_input("설계 피복(mm)", 10.0, 200.0, 40.0)
             with c3:
+                # [수정 B] 잔여피복·잔존수명 산정의 기준값. 0이면 설계 피복으로 대체.
+                cover_real = st.number_input("실측 피복(mm)", 0.0, 300.0, 0.0, step=1.0,
+                                             help="철근탐사로 측정한 실제 피복두께. "
+                                                  "0이면 설계 피복으로 계산합니다(권장하지 않음).")
+            with c4:
                 a_years = st.number_input("경과 년수(년)", 1, 100, 20,
                                            help="시설물 준공 후 경과한 햇수")
+        if not cover_real:
+            st.caption("⚠ 실측 피복을 입력하지 않아 설계 피복으로 산정합니다. "
+                       "세부지침은 실측 피복 기준 평가를 원칙으로 합니다.")
 
         if st.button("평가 실행", type="primary", key="btn_carb_run", use_container_width=True):
-            rate_a, rem, total_life, res_life, grade, color = _carb_evaluate(m_depth, d_cover, a_years)
+            rate_a, rem, total_life, res_life, grade, color = _carb_evaluate(
+                m_depth, d_cover, a_years, cover_real)
+            cover_eff = float(cover_real) if cover_real else float(d_cover)
 
             if m_depth == 0:
                 st.success("✅ 탄산화 미검출 (측정 깊이 0mm)")
@@ -2376,11 +2399,12 @@ with tab3:
                 cc1, cc2, cc3 = st.columns(3)
                 cc1.metric("잔여 피복량", f"{rem:.1f} mm")
                 cc2.metric("속도 계수 (A)", f"{rate_a:.3f}" if rate_a > 0 else "N/A")
-                cc3.metric("예측 잔여수명",
-                          f"{max(0, res_life):.1f} 년" if res_life != float('inf') else "∞")
+                cc3.metric("예측 잔여수명", _fmt_life(res_life))
                 if rate_a > 0:
+                    _basis = "실측" if cover_real else "설계"
                     st.info(f"**계산 근거:** $A = {m_depth} / \\sqrt{{{a_years}}} = {rate_a:.3f}$, "
-                            f"잔여수명 $T = ({d_cover}/{rate_a:.3f})^2 - {a_years} = {res_life:.1f}$년")
+                            f"잔여수명 $T = ({cover_eff}/{rate_a:.3f})^2 - {a_years} = {res_life:.1f}$년 "
+                            f"({_basis} 피복 {cover_eff:g}mm 기준)")
 
             if rate_a > 0:
                 y_steps = np.linspace(0, 100, 101)
@@ -2390,7 +2414,7 @@ with tab3:
                     x=alt.X('경과년수', title='경과년수 (년)'),
                     y=alt.Y('탄산화깊이', title='탄산화 깊이 (mm)')
                 )
-                rule = alt.Chart(pd.DataFrame({'y': [d_cover]})).mark_rule(
+                rule = alt.Chart(pd.DataFrame({'y': [cover_eff]})).mark_rule(
                     color='#D62828', strokeDash=[5, 5], size=2).encode(y='y')
                 point = alt.Chart(pd.DataFrame({'x': [a_years], 'y': [m_depth]})).mark_point(
                     color='#F4A100', size=100, filled=True).encode(x='x', y='y')
@@ -2401,10 +2425,12 @@ with tab3:
                     "프로젝트명": p_name,
                     "측정 깊이(mm)": f"{m_depth:.1f}",
                     "설계 피복(mm)": f"{d_cover:.1f}",
+                    "실측 피복(mm)": f"{cover_real:.1f}" if cover_real else "미측정(설계 피복 적용)",
+                    "산정 기준 피복(mm)": f"{cover_eff:.1f}",
                     "경과 년수(년)": int(a_years),
                     "잔여 피복량(mm)": f"{rem:.1f}",
                     "속도 계수 A": f"{rate_a:.3f}" if rate_a > 0 else "N/A",
-                    "예측 잔여수명(년)": f"{max(0, res_life):.1f}" if res_life != float('inf') else "∞",
+                    "예측 잔여수명": _fmt_life(res_life),
                     "판정 등급": grade,
                 }
                 try:
@@ -2425,6 +2451,7 @@ with tab3:
             "지점": ["P1-슬래브", "P2-기둥", "P3-벽체"],
             "측정깊이(mm)": [12.0, 8.5, 15.0],
             "설계피복(mm)": [40.0, 40.0, 30.0],
+            "실측피복(mm)": [45.0, 85.0, 0.0],   # [수정 B] 0이면 설계피복으로 대체
             "경과년수(년)": [20, 20, 20],
         })
         try:
@@ -2451,13 +2478,14 @@ with tab3:
                         "지점": row.get("지점", f"P{idx+1}"),
                         "측정깊이(mm)": _safe_num(row.get("측정깊이(mm)", 0), 0, float),
                         "설계피복(mm)": _safe_num(row.get("설계피복(mm)", 40), 40, float),
+                        "실측피복(mm)": _safe_num(row.get("실측피복(mm)", 0), 0, float),
                         "경과년수(년)": _safe_num(row.get("경과년수(년)", 20), 20, int),
                     })
             except Exception as e:
                 st.error(f"파일 파싱 실패: {e}")
 
         df_c_batch = pd.DataFrame(carb_init) if carb_init else pd.DataFrame(
-            columns=["선택", "지점", "측정깊이(mm)", "설계피복(mm)", "경과년수(년)"])
+            columns=["선택", "지점", "측정깊이(mm)", "설계피복(mm)", "실측피복(mm)", "경과년수(년)"])
 
         edited_carb = st.data_editor(
             df_c_batch,
@@ -2465,6 +2493,8 @@ with tab3:
                 "선택": st.column_config.CheckboxColumn("선택", default=True),
                 "측정깊이(mm)": st.column_config.NumberColumn("측정깊이(mm)", min_value=0.0, max_value=200.0, step=0.1),
                 "설계피복(mm)": st.column_config.NumberColumn("설계피복(mm)", min_value=10.0, max_value=300.0, step=1.0),
+                "실측피복(mm)": st.column_config.NumberColumn("실측피복(mm)", min_value=0.0, max_value=300.0, step=1.0,
+                                                        help="0이면 설계피복으로 산정"),
                 "경과년수(년)": st.column_config.NumberColumn("경과년수(년)", min_value=1, max_value=200),
             },
             use_container_width=True, hide_index=True, num_rows="dynamic"
@@ -2478,16 +2508,19 @@ with tab3:
                 try:
                     md = float(row["측정깊이(mm)"])
                     dc = float(row["설계피복(mm)"])
+                    cr = float(row.get("실측피복(mm)", 0) or 0)
                     ay = int(row["경과년수(년)"])
-                    rate_a, rem, _, res_life, grade, _ = _carb_evaluate(md, dc, ay)
+                    rate_a, rem, _, res_life, grade, _ = _carb_evaluate(md, dc, ay, cr)
                     res_rows.append({
                         "지점": row.get("지점", "P"),
                         "측정깊이(mm)": md,
                         "설계피복(mm)": dc,
+                        "실측피복(mm)": cr if cr else "미측정",
+                        "산정기준피복(mm)": cr if cr else dc,
                         "경과년수(년)": ay,
                         "잔여피복(mm)": round(rem, 1),
                         "속도계수A": round(rate_a, 3) if rate_a > 0 else 0,
-                        "잔여수명(년)": "∞" if res_life == float('inf') else round(max(0, res_life), 1),
+                        "잔여수명(년)": _fmt_life(res_life),
                         "등급": grade,
                     })
                 except Exception as e:
@@ -2689,9 +2722,23 @@ with tab4:
         session_data_str = " ".join([f"{x:.1f}" for x in st.session_state['rebound_data']])
         default_stat_txt = session_data_str if session_data_str else "24.5 26.2 23.1 21.8 25.5 27.0"
 
+        # [수정 A] st.text_area는 key가 세션에 존재하면 value 인자를 무시한다.
+        # 그대로 두면 반발경도 탭에서 지점을 추가해도 이 칸이 첫 렌더 값에 고정된다.
+        # 누적 데이터의 서명이 바뀐 경우에만 세션 값을 직접 갱신해,
+        # 사용자가 손으로 편집한 내용은 보존한다.
+        if 'stat_raw' not in st.session_state:
+            st.session_state['stat_raw'] = default_stat_txt
+            st.session_state['_stat_sig'] = session_data_str
+        elif session_data_str and st.session_state.get('_stat_sig') != session_data_str:
+            st.session_state['stat_raw'] = session_data_str
+            st.session_state['_stat_sig'] = session_data_str
+
+        if session_data_str:
+            st.caption(f"↺ 반발경도 탭 누적 지점 {len(st.session_state['rebound_data'])}개의 "
+                       "평균강도가 자동 반영됩니다. 직접 수정해도 됩니다.")
+
         raw_txt = st.text_area(
             "강도 데이터 목록",
-            default_stat_txt,
             height=68,
             key="stat_raw",
             help="여러 값은 공백, 줄바꿈, 쉼표로 구분할 수 있습니다. 소수점은 24.5처럼 점(.)을 사용하세요."
