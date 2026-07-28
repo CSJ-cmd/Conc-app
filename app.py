@@ -1,4 +1,4 @@
-import streamlit as st
+mport streamlit as st
 import math
 import pandas as pd
 import numpy as np
@@ -8,6 +8,8 @@ import re
 import logging
 import hashlib
 import html
+import json
+from datetime import datetime, timezone, timedelta
 from PIL import Image
 
 logger = logging.getLogger(__name__)
@@ -413,6 +415,11 @@ REBOUND_DEFAULT_GRID_TEXT = "54 56 55 53 58 55 54 55 52 57 55 56 54 55 59 42 55 
 REBOUND_FORMULA_OPTIONS = ["일본재료", "일본건축", "과기부", "권영웅", "KALIS"]
 REBOUND_FORMULA_NAMES = set(REBOUND_FORMULA_OPTIONS)
 REBOUND_FORMULA_RECOMMEND_THRESHOLD = 40.0
+
+# 탄산화 탭의 입력 방식 라디오(key="carb_mode")가 실제로 갖는 옵션 문자열.
+# 체크포인트 복원 시 유효성 검증 및 테스트 픽스처가 이 목록과 어긋나지 않도록
+# 라디오 위젯도 이 상수를 그대로 사용한다.
+CARB_MODE_OPTIONS = ["단일 지점", "다중 지점 (엑셀 업로드)"]
 
 REBOUND_POINT_POLICY_EXACT_20 = "exact_20"
 REBOUND_POINT_POLICY_MIN_20 = "min_20"
@@ -1206,7 +1213,7 @@ def generate_pdf_report(project_name, report_type, summary_dict, detail_df=None,
                            fontName=font_name, fontSize=9, leading=13)
 
     story = []
-    story.append(Paragraph(f"{project_name}", title_style))
+    story.append(Paragraph(_safe_html(project_name), title_style))
     story.append(Paragraph(f"비파괴검사 결과 보고서 ({report_type})", h2))
     story.append(Paragraph(f"작성일: {datetime.now().strftime('%Y-%m-%d %H:%M')}", body))
     story.append(Spacer(1, 6*mm))
@@ -1254,7 +1261,7 @@ def generate_pdf_report(project_name, report_type, summary_dict, detail_df=None,
 
     if notes:
         story.append(Paragraph("■ 비고", h2))
-        story.append(Paragraph(str(notes).replace("\n", "<br/>"), body))
+        story.append(Paragraph(_safe_html(notes).replace("\n", "<br/>"), body))
 
     story.append(Spacer(1, 8*mm))
     story.append(Paragraph(
@@ -1282,6 +1289,137 @@ def to_excel(df):
             continue
 
     raise RuntimeError("엑셀 저장 엔진(xlsxwriter/openpyxl)이 설치되어 있지 않습니다.") from last_err
+
+
+CHECKPOINT_SCHEMA_VERSION = 1
+
+
+def build_checkpoint_payload(state, now=None):
+    """진행상황 저장용 payload를 만든다.
+    state는 st.session_state처럼 .get(key, default)을 지원하는 매핑이면 된다
+    (테스트에서는 plain dict를 넘긴다)."""
+    if now is None:
+        now = datetime.now(timezone(timedelta(hours=9)))
+
+    formula_mode_label = state.get("reb_formula_mode_label")
+    if formula_mode_label == "공식 직접 선택":
+        selected_formulas = list(state.get("reb_selected_methods") or [])
+    else:
+        selected_formulas = None
+
+    point_policy_label = state.get("reb_point_policy_label")
+    point_count_policy = (
+        normalize_rebound_point_policy(point_policy_label)
+        if point_policy_label else DEFAULT_REBOUND_POINT_POLICY
+    )
+
+    return {
+        "schema_version": CHECKPOINT_SCHEMA_VERSION,
+        "saved_at": now.isoformat(),
+        "project_name": state.get("proj_name", "") or "",
+        "rebound": {
+            "records": list(state.get("rebound_records", []) or []),
+            "add_point_name": state.get("add_point_name") or "P1",
+            "readings_text": state.get("reb_src_txt", "") or "",
+            "in_progress_inputs": {
+                "angle": state.get("reb_angle"),
+                "days": state.get("reb_days"),
+                "design_fck": state.get("reb_fck"),
+                "core_coeff": state.get("reb_ct"),
+                "selected_formulas": selected_formulas,
+                "point_count_policy": point_count_policy,
+            },
+        },
+        "carbonation": {
+            "batch_rows": list(state.get("carb_batch_rows_snapshot", []) or []),
+            "carb_mode": state.get("carb_mode"),
+            "single_in_progress": {
+                "m_depth": state.get("carb_m_depth"),
+                "d_cover": state.get("carb_d_cover"),
+                "cover_real": state.get("carb_cover_real"),
+                "a_years": state.get("carb_a_years"),
+            },
+        },
+    }
+
+
+def apply_checkpoint_payload(payload):
+    """체크포인트 JSON을 st.session_state에 반영할 {key: value} 딕셔너리로 변환한다.
+    형식이 잘못되면 사용자에게 그대로 보여줄 수 있는 한국어 메시지의 ValueError를 던진다."""
+    if not isinstance(payload, dict):
+        raise ValueError("체크포인트 파일 형식이 올바르지 않습니다 (JSON 객체가 아님).")
+
+    version = payload.get("schema_version")
+    if version != CHECKPOINT_SCHEMA_VERSION:
+        raise ValueError(
+            f"지원하지 않는 체크포인트 파일 버전입니다: {version!r} "
+            f"(현재 지원 버전: {CHECKPOINT_SCHEMA_VERSION})."
+        )
+
+    rebound = payload.get("rebound")
+    carbonation = payload.get("carbonation")
+    if not isinstance(rebound, dict) or not isinstance(carbonation, dict):
+        raise ValueError("체크포인트 파일에 'rebound' 또는 'carbonation' 데이터가 없습니다.")
+
+    records = rebound.get("records")
+    if not isinstance(records, list):
+        raise ValueError("체크포인트 파일의 반발경도 지점 데이터(records)가 올바르지 않습니다.")
+
+    batch_rows = carbonation.get("batch_rows")
+    if not isinstance(batch_rows, list):
+        raise ValueError("체크포인트 파일의 탄산화 그리드 데이터(batch_rows)가 올바르지 않습니다.")
+
+    in_progress = rebound.get("in_progress_inputs") or {}
+    single_carb = carbonation.get("single_in_progress") or {}
+
+    angle_value = in_progress.get("angle")
+    if angle_value is not None and angle_value not in ALLOWED_REBOUND_ANGLES:
+        raise ValueError(f"체크포인트 파일의 타격각도 값이 올바르지 않습니다: {angle_value!r}")
+
+    selected_formulas = in_progress.get("selected_formulas")
+    if selected_formulas is not None:
+        invalid_names = [name for name in selected_formulas if name not in REBOUND_FORMULA_NAMES]
+        if invalid_names:
+            raise ValueError(f"체크포인트 파일에 알 수 없는 공식이 포함되어 있습니다: {invalid_names}")
+    formula_mode_label = "공식 직접 선택" if selected_formulas is not None else "설계강도 기준 자동추천"
+
+    point_count_policy = in_progress.get("point_count_policy") or DEFAULT_REBOUND_POINT_POLICY
+    # normalize_rebound_point_policy()는 인식할 수 없는 값에 대해 이미 한국어 ValueError를 던지므로,
+    # 여기서 삼키지 않고 그대로 전파해 잘못된 체크포인트가 세션을 망가뜨리기 전에 걸러낸다.
+    point_policy_label = get_rebound_point_policy_label(point_count_policy)
+
+    add_point_name = rebound.get("add_point_name") or f"P{len(records) + 1}"
+
+    return {
+        "proj_name": payload.get("project_name", "") or "",
+        "rebound_records": records,
+        "rebound_data": [
+            r.get("평균") for r in records if isinstance(r, dict) and "평균" in r
+        ],
+        "add_point_name": add_point_name,
+        "reb_src_txt": rebound.get("readings_text", "") or "",
+        "reb_paste_area": rebound.get("readings_text", "") or "",
+        "reb_angle": in_progress.get("angle"),
+        "reb_days": in_progress.get("days"),
+        "reb_fck": in_progress.get("design_fck"),
+        "reb_ct": in_progress.get("core_coeff"),
+        "reb_selected_methods": selected_formulas or [],
+        "reb_formula_mode_label": formula_mode_label,
+        "reb_point_policy_label": point_policy_label,
+        "carb_batch_restore_pending": batch_rows,
+        "carb_batch_rows_snapshot": batch_rows,
+        # angle/formula와 달리 carb_mode는 잘못돼도 복원 전체를 실패시키지 않고,
+        # 실제 라디오 옵션에 없으면 조용히 기본값(첫 번째 옵션)으로 떨어뜨린다.
+        "carb_mode": (
+            carbonation.get("carb_mode")
+            if carbonation.get("carb_mode") in CARB_MODE_OPTIONS
+            else CARB_MODE_OPTIONS[0]
+        ),
+        "carb_m_depth": single_carb.get("m_depth"),
+        "carb_d_cover": single_carb.get("d_cover"),
+        "carb_cover_real": single_carb.get("cover_real"),
+        "carb_a_years": single_carb.get("a_years"),
+    }
 
 
 def run_validation_tests():
@@ -1419,6 +1557,97 @@ def run_validation_tests():
         "20개이상_24개중5개기각": res7f,
     }))
 
+    checkpoint_state_full = {
+        "proj_name": "테스트 시설물",
+        "rebound_records": [{"지점": "P1", "평균": 33.5, "과기부": 33.5}],
+        "add_point_name": "P2",
+        "reb_src_txt": "54 56 55",
+        "reb_angle": 90,
+        "reb_days": 3000,
+        "reb_fck": 40.0,
+        "reb_ct": 1.0,
+        "reb_formula_mode_label": "공식 직접 선택",
+        "reb_selected_methods": ["과기부", "권영웅"],
+        "reb_point_policy_label": "정확히 20개",
+        "carb_batch_rows_snapshot": [{"지점": "C1", "측정깊이(mm)": 12.0}],
+        "carb_mode": CARB_MODE_OPTIONS[1],
+        "carb_m_depth": 12.0,
+        "carb_d_cover": 40.0,
+        "carb_cover_real": 0.0,
+        "carb_a_years": 20,
+    }
+    fixed_now = datetime(2026, 7, 28, 10, 0, 0, tzinfo=timezone(timedelta(hours=9)))
+    payload_full = build_checkpoint_payload(checkpoint_state_full, now=fixed_now)
+    restored_full = apply_checkpoint_payload(payload_full)
+
+    tc8a_pass = (
+        payload_full["saved_at"] == "2026-07-28T10:00:00+09:00"
+        and restored_full["proj_name"] == "테스트 시설물"
+        and restored_full["rebound_records"] == checkpoint_state_full["rebound_records"]
+        and restored_full["rebound_data"] == [33.5]
+        and restored_full["add_point_name"] == "P2"
+        and restored_full["reb_src_txt"] == "54 56 55"
+        and restored_full["reb_angle"] == 90
+        and restored_full["reb_formula_mode_label"] == "공식 직접 선택"
+        and restored_full["reb_selected_methods"] == ["과기부", "권영웅"]
+        and restored_full["carb_batch_restore_pending"] == [{"지점": "C1", "측정깊이(mm)": 12.0}]
+        and restored_full["carb_batch_rows_snapshot"] == [{"지점": "C1", "측정깊이(mm)": 12.0}]
+        and restored_full["carb_mode"] == CARB_MODE_OPTIONS[1]
+        and restored_full["carb_cover_real"] == 0.0  # 실측 0mm는 None과 구분되어 보존돼야 함
+    )
+
+    checkpoint_state_auto = dict(checkpoint_state_full)
+    checkpoint_state_auto["reb_formula_mode_label"] = "설계강도 기준 자동추천"
+    payload_auto = build_checkpoint_payload(checkpoint_state_auto, now=fixed_now)
+    restored_auto = apply_checkpoint_payload(payload_auto)
+    tc8b_pass = (
+        payload_auto["rebound"]["in_progress_inputs"]["selected_formulas"] is None
+        and restored_auto["reb_formula_mode_label"] == "설계강도 기준 자동추천"
+        and restored_auto["reb_selected_methods"] == []
+    )
+
+    checkpoint_errors = {}
+    _bad_angle_payload = json.loads(json.dumps(payload_full))
+    _bad_angle_payload["rebound"]["in_progress_inputs"]["angle"] = 30
+    _bad_formula_payload = json.loads(json.dumps(payload_full))
+    _bad_formula_payload["rebound"]["in_progress_inputs"]["selected_formulas"] = ["존재하지않는공식"]
+    for bad_name, bad_payload in [
+        ("스키마 버전 불일치", {**payload_full, "schema_version": 99}),
+        ("rebound 누락", {k: v for k, v in payload_full.items() if k != "rebound"}),
+        ("records가 리스트 아님", {**payload_full, "rebound": {**payload_full["rebound"], "records": "x"}}),
+        ("잘못된 타격각도", _bad_angle_payload),
+        ("알 수 없는 공식명", _bad_formula_payload),
+    ]:
+        try:
+            apply_checkpoint_payload(bad_payload)
+            checkpoint_errors[bad_name] = "에러 없이 통과함(실패)"
+        except ValueError as e:
+            checkpoint_errors[bad_name] = str(e)
+    tc8c_pass = all(
+        "에러 없이 통과함" not in v for v in checkpoint_errors.values()
+    )
+
+    # 구버전(carb_mode 필드가 없는) 체크포인트 파일을 복원해도 안전한 기본값(첫 번째 옵션)으로 떨어져야 한다.
+    _legacy_payload = json.loads(json.dumps(payload_full))
+    del _legacy_payload["carbonation"]["carb_mode"]
+    restored_legacy = apply_checkpoint_payload(_legacy_payload)
+    tc8d_pass = restored_legacy["carb_mode"] == CARB_MODE_OPTIONS[0]
+
+    # 라디오의 실제 옵션 문자열이 아닌 값(예: 손상됐거나 라벨이 바뀌기 전 구버전 값)은
+    # 복원을 실패시키지 않고 조용히 기본 옵션으로 대체돼야 한다.
+    _bad_mode_payload = json.loads(json.dumps(payload_full))
+    _bad_mode_payload["carbonation"]["carb_mode"] = "다중 지점"  # 실제 옵션 문자열이 아님
+    restored_bad_mode = apply_checkpoint_payload(_bad_mode_payload)
+    tc8e_pass = restored_bad_mode["carb_mode"] == CARB_MODE_OPTIONS[0]
+
+    results.append(("TC8(체크포인트 저장/복원 왕복)", tc8a_pass and tc8b_pass and tc8c_pass and tc8d_pass and tc8e_pass, {
+        "수동선택_왕복": tc8a_pass,
+        "자동추천_왕복": tc8b_pass,
+        "잘못된_파일_거부": checkpoint_errors,
+        "구버전_carb_mode_기본값": tc8d_pass,
+        "잘못된_carb_mode_대체": tc8e_pass,
+    }))
+
     return results
 
 
@@ -1435,11 +1664,31 @@ def run_validation_tests():
 
 with st.sidebar:
     st.header("⚙️ 프로젝트 정보")
-    p_name = st.text_input("프로젝트명", "OO시설물 정밀점검")
+    p_name = st.text_input("프로젝트명", "OO시설물 정밀점검", key="proj_name")
     st.divider()
     st.caption("시설물안전법 및 세부지침 준수")
 
 render_app_header(p_name)
+
+
+def _checkpoint_state_hash(payload):
+    payload_for_hash = {k: v for k, v in payload.items() if k != "saved_at"}
+    return hashlib.blake2b(
+        json.dumps(payload_for_hash, sort_keys=True, ensure_ascii=False).encode("utf-8"),
+        digest_size=8,
+    ).hexdigest()
+
+
+# [Fix B - round 2] 저장 패널은 화면상 탭보다 위에 보여야 하지만, 그 내용(특히
+# build_checkpoint_payload가 읽는 carb_batch_rows_snapshot 등)은 이번 스크립트 실행에서
+# 각 탭이 실제로 렌더링을 마친 "이후"의 session_state를 반영해야 최신 상태로 저장된다.
+# st.container()로 화면 위치만 먼저 예약해 두고, 실제 내용은 tab1~tab4가 모두 실행된
+# 뒤에 채운다(Streamlit은 먼저 생성된 컨테이너를 나중에 채워도 원래 위치에 렌더링한다).
+checkpoint_panel = st.container(border=True)
+# [Fix C - round 3] 불러오기 실패 메시지도 패널과 같은 이유로 화면 위치를 미리 예약해 둔다.
+# 이 컨테이너에 담기지 않으면 st.error(...) 호출 자체는 tab4 이후(탭 로직과 같은 실행 순서)에
+# 실행되므로, 화면 맨 아래(모든 탭 콘텐츠 밑)에 렌더링되어 사용자가 놓치기 쉽다.
+checkpoint_msg = st.container()
 
 tab1, tab2, tab3, tab4 = st.tabs(["📖 점검 매뉴얼", "🔨 반발경도", "🧪 탄산화", "📈 통계·비교"])
 
@@ -1677,27 +1926,31 @@ with tab2:
                 angle = st.selectbox(
                     "타격 방향",
                     [90, 45, 0, -45, -90],
-                    format_func=lambda x: {90: "+90°(상향수직)", 45: "+45°(상향경사)", 0: "0°(수평)", -45: "-45°(하향경사)", -90: "-90°(하향수직)"}[x]
+                    format_func=lambda x: {90: "+90°(상향수직)", 45: "+45°(상향경사)", 0: "0°(수평)", -45: "-45°(하향경사)", -90: "-90°(하향수직)"}[x],
+                    key="reb_angle"
                 )
                 days = st.number_input("재령(일)", 1, 10000, 3000,
-                                      help="공용연수(년) × 365 + 양생기간. 기본 3000일(약 8년) 적용")
-                fck = st.number_input("설계강도(MPa)", 15.0, 100.0, 24.0)
-                ct = st.number_input("코어 보정계수 Ct", 0.10, 2.00, 1.00, step=0.01)
+                                      help="공용연수(년) × 365 + 양생기간. 기본 3000일(약 8년) 적용",
+                                      key="reb_days")
+                fck = st.number_input("설계강도(MPa)", 15.0, 100.0, 24.0, key="reb_fck")
+                ct = st.number_input("코어 보정계수 Ct", 0.10, 2.00, 1.00, step=0.01, key="reb_ct")
             else:
                 c1, c2, c3, c4 = st.columns(4)
                 with c1:
                     angle = st.selectbox(
                         "타격 방향",
                         [90, 45, 0, -45, -90],
-                        format_func=lambda x: {90: "+90°(상향수직)", 45: "+45°(상향경사)", 0: "0°(수평)", -45: "-45°(하향경사)", -90: "-90°(하향수직)"}[x]
+                        format_func=lambda x: {90: "+90°(상향수직)", 45: "+45°(상향경사)", 0: "0°(수평)", -45: "-45°(하향경사)", -90: "-90°(하향수직)"}[x],
+                        key="reb_angle"
                     )
                 with c2:
                     days = st.number_input("재령(일)", 1, 10000, 3000,
-                                          help="공용연수(년) × 365 + 양생기간. 기본 3000일(약 8년) 적용")
+                                          help="공용연수(년) × 365 + 양생기간. 기본 3000일(약 8년) 적용",
+                                          key="reb_days")
                 with c3:
-                    fck = st.number_input("설계강도(MPa)", 15.0, 100.0, 24.0)
+                    fck = st.number_input("설계강도(MPa)", 15.0, 100.0, 24.0, key="reb_fck")
                 with c4:
-                    ct = st.number_input("코어 보정계수 Ct", 0.10, 2.00, 1.00, step=0.01)
+                    ct = st.number_input("코어 보정계수 Ct", 0.10, 2.00, 1.00, step=0.01, key="reb_ct")
 
             # 측정점수 정책 선택
             point_policy_labels = [
@@ -1712,7 +1965,8 @@ with tab2:
                 help=(
                     "기본값은 20개입니다. 추가 측정값을 평균 산정에 포함해야 하는 경우에만 "
                     "20개 이상 허용을 선택하세요."
-                )
+                ),
+                key="reb_point_policy_label"
             )
             point_count_policy = normalize_rebound_point_policy(point_policy_label)
             st.info(f"측정점수 정책: {get_rebound_point_policy_description(point_count_policy)}")
@@ -1727,7 +1981,8 @@ with tab2:
                 help=(
                     "자동추천은 설계강도 기준으로 평균 산정 공식을 자동 적용합니다. "
                     "직접 선택은 책임기술자 판단으로 평균 산정에 사용할 공식을 지정할 때 사용합니다."
-                )
+                ),
+                key="reb_formula_mode_label"
             )
 
             if formula_mode_label == "설계강도 기준 자동추천":
@@ -1738,7 +1993,8 @@ with tab2:
                     "평균 산정 적용 공식",
                     formula_opts,
                     default=[],
-                    help="직접 선택 모드에서는 1개 이상의 공식을 선택해야 계산할 수 있습니다."
+                    help="직접 선택 모드에서는 1개 이상의 공식을 선택해야 계산할 수 있습니다.",
+                    key="reb_selected_methods"
                 )
                 if selected_methods:
                     st.info(f"수동 선택 적용 공식: {', '.join(selected_methods)}")
@@ -2326,7 +2582,7 @@ with tab2:
 with tab3:
     st.subheader("🧪 탄산화 깊이 및 상세 분석")
 
-    carb_mode = st.radio("입력 방식", ["단일 지점", "다중 지점 (엑셀 업로드)"],
+    carb_mode = st.radio("입력 방식", CARB_MODE_OPTIONS,
                          horizontal=True, key="carb_mode")
 
     def _carb_grade(rem):
@@ -2343,8 +2599,9 @@ with tab3:
         """[수정 B] 잔여피복·잔존수명은 '실측 피복' 기준으로 산정한다.
         세부지침 및 실제 점검보고서가 실측 피복을 사용하며,
         구축된 이력 DB 319행에서 (잔여 = 실측피복 − 깊이)가 전수 일치함을 확인.
-        cover_real 미입력 시에는 기존 동작(설계 피복)과 동일하게 대체한다."""
-        cover_eff = float(cover_real) if cover_real else float(d_cover)
+        cover_real 미입력(None/NaN) 시에는 기존 동작(설계 피복)과 동일하게 대체한다.
+        단, 실측 피복이 0mm로 명시 입력된 경우(철근 노출 등)는 대체하지 않고 그대로 사용한다."""
+        cover_eff = float(cover_real) if pd.notna(cover_real) else float(d_cover)
         rate_a = m_depth / math.sqrt(a_years) if a_years > 0 else 0
         rem = cover_eff - m_depth
         if rate_a > 0:
@@ -2368,25 +2625,29 @@ with tab3:
         with st.container(border=True):
             c1, c2, c3, c4 = st.columns(4)
             with c1:
-                m_depth = st.number_input("측정 깊이(mm)", 0.0, 100.0, 12.0)
+                m_depth = st.number_input("측정 깊이(mm)", 0.0, 100.0, 12.0, key="carb_m_depth")
             with c2:
-                d_cover = st.number_input("설계 피복(mm)", 10.0, 200.0, 40.0)
+                d_cover = st.number_input("설계 피복(mm)", 10.0, 200.0, 40.0, key="carb_d_cover")
             with c3:
-                # [수정 B] 잔여피복·잔존수명 산정의 기준값. 0이면 설계 피복으로 대체.
-                cover_real = st.number_input("실측 피복(mm)", 0.0, 300.0, 0.0, step=1.0,
+                # [수정 B] 잔여피복·잔존수명 산정의 기준값. 비워두면(미입력) 설계 피복으로 대체.
+                # 실측값 0mm(철근 노출)은 미입력과 구분되어야 하므로 기본값을 0이 아닌 None(빈칸)으로 둔다.
+                cover_real = st.number_input("실측 피복(mm)", min_value=0.0, max_value=300.0, value=None, step=1.0,
                                              help="철근탐사로 측정한 실제 피복두께. "
-                                                  "0이면 설계 피복으로 계산합니다(권장하지 않음).")
+                                                  "비워두면 설계 피복으로 계산합니다(권장하지 않음). "
+                                                  "실측값이 0mm(철근 노출)이면 0을 직접 입력하세요.",
+                                             key="carb_cover_real")
             with c4:
                 a_years = st.number_input("경과 년수(년)", 1, 100, 20,
-                                           help="시설물 준공 후 경과한 햇수")
-        if not cover_real:
+                                           help="시설물 준공 후 경과한 햇수",
+                                           key="carb_a_years")
+        if cover_real is None:
             st.caption("⚠ 실측 피복을 입력하지 않아 설계 피복으로 산정합니다. "
                        "세부지침은 실측 피복 기준 평가를 원칙으로 합니다.")
 
         if st.button("평가 실행", type="primary", key="btn_carb_run", use_container_width=True):
             rate_a, rem, total_life, res_life, grade, color = _carb_evaluate(
                 m_depth, d_cover, a_years, cover_real)
-            cover_eff = float(cover_real) if cover_real else float(d_cover)
+            cover_eff = float(cover_real) if pd.notna(cover_real) else float(d_cover)
 
             if m_depth == 0:
                 st.success("✅ 탄산화 미검출 (측정 깊이 0mm)")
@@ -2399,7 +2660,7 @@ with tab3:
                 cc2.metric("속도 계수 (A)", f"{rate_a:.3f}" if rate_a > 0 else "N/A")
                 cc3.metric("예측 잔여수명", _fmt_life(res_life))
                 if rate_a > 0:
-                    _basis = "실측" if cover_real else "설계"
+                    _basis = "실측" if pd.notna(cover_real) else "설계"
                     st.info(f"**계산 근거:** $A = {m_depth} / \\sqrt{{{a_years}}} = {rate_a:.3f}$, "
                             f"잔여수명 $T = ({cover_eff}/{rate_a:.3f})^2 - {a_years} = {res_life:.1f}$년 "
                             f"({_basis} 피복 {cover_eff:g}mm 기준)")
@@ -2423,7 +2684,7 @@ with tab3:
                     "프로젝트명": p_name,
                     "측정 깊이(mm)": f"{m_depth:.1f}",
                     "설계 피복(mm)": f"{d_cover:.1f}",
-                    "실측 피복(mm)": f"{cover_real:.1f}" if cover_real else "미측정(설계 피복 적용)",
+                    "실측 피복(mm)": f"{cover_real:.1f}" if pd.notna(cover_real) else "미측정(설계 피복 적용)",
                     "산정 기준 피복(mm)": f"{cover_eff:.1f}",
                     "경과 년수(년)": int(a_years),
                     "잔여 피복량(mm)": f"{rem:.1f}",
@@ -2461,26 +2722,51 @@ with tab3:
             st.error(str(e))
 
         carb_file = st.file_uploader("작성된 탄산화 데이터 업로드", type=["csv", "xlsx"], key="carb_up")
-        carb_init = []
-        if carb_file:
-            try:
-                if carb_file.name.endswith(".csv"):
-                    df_c = pd.read_csv(carb_file)
-                else:
-                    df_c = pd.read_excel(carb_file)
-                # [수정 #7] 헤더 앞뒤 공백 제거 → 컬럼명 공백으로 인한 기본값 둔갑 방지
-                df_c.columns = df_c.columns.astype(str).str.strip()
-                for idx, row in df_c.iterrows():
-                    carb_init.append({
-                        "선택": True,
-                        "지점": row.get("지점", f"P{idx+1}"),
-                        "측정깊이(mm)": _safe_num(row.get("측정깊이(mm)", 0), 0, float),
-                        "설계피복(mm)": _safe_num(row.get("설계피복(mm)", 40), 40, float),
-                        "실측피복(mm)": _safe_num(row.get("실측피복(mm)", 0), 0, float),
-                        "경과년수(년)": _safe_num(row.get("경과년수(년)", 20), 20, int),
-                    })
-            except Exception as e:
-                st.error(f"파일 파싱 실패: {e}")
+
+        if "carb_grid_ver" not in st.session_state:
+            st.session_state["carb_grid_ver"] = 0
+
+        if st.session_state.get("carb_batch_restore_pending") is not None:
+            carb_init = st.session_state.pop("carb_batch_restore_pending")
+            st.session_state["carb_batch_rows_snapshot"] = carb_init
+            st.session_state["carb_grid_ver"] += 1
+        elif carb_file:
+            # [Fix A - round 2] st.file_uploader는 파일이 위젯에 남아있는 한 매 rerun마다
+            # 같은 UploadedFile을 truthy로 계속 반환한다. 서명 가드 없이 매번 재파싱 +
+            # carb_grid_ver 증가를 하면, 업로드 이후 사용자가 그리드를 아무리 편집해도
+            # 다음 rerun마다 위젯 key가 바뀌어 편집 내용이 사라진다(그리드가 사실상
+            # 읽기 전용이 됨). 체크포인트 업로더(_checkpoint_upload_sig)·OCR 업로더
+            # (ocr_upload_sig)와 동일한 패턴으로, 서명이 실제로 바뀐 경우에만 재파싱한다.
+            carb_upload_sig = (carb_file.name, carb_file.size)
+            if st.session_state.get("carb_file_upload_sig") != carb_upload_sig:
+                st.session_state["carb_file_upload_sig"] = carb_upload_sig
+                carb_init = []
+                try:
+                    if carb_file.name.endswith(".csv"):
+                        df_c = pd.read_csv(carb_file)
+                    else:
+                        df_c = pd.read_excel(carb_file)
+                    # [수정 #7] 헤더 앞뒤 공백 제거 → 컬럼명 공백으로 인한 기본값 둔갑 방지
+                    df_c.columns = df_c.columns.astype(str).str.strip()
+                    for idx, row in df_c.iterrows():
+                        carb_init.append({
+                            "선택": True,
+                            "지점": row.get("지점", f"P{idx+1}"),
+                            "측정깊이(mm)": _safe_num(row.get("측정깊이(mm)", 0), 0, float),
+                            "설계피복(mm)": _safe_num(row.get("설계피복(mm)", 40), 40, float),
+                            # 업로드 파일에 컬럼/값이 없으면 NaN(미측정)으로 남겨, 실측 0mm(철근 노출) 입력과 구분한다.
+                            "실측피복(mm)": _safe_num(row.get("실측피복(mm)", np.nan), np.nan, float),
+                            "경과년수(년)": _safe_num(row.get("경과년수(년)", 20), 20, int),
+                        })
+                    st.session_state["carb_batch_rows_snapshot"] = carb_init
+                    st.session_state["carb_grid_ver"] += 1
+                except Exception as e:
+                    st.error(f"파일 파싱 실패: {e}")
+                    carb_init = st.session_state.get("carb_batch_rows_snapshot", [])
+            else:
+                carb_init = st.session_state.get("carb_batch_rows_snapshot", [])
+        else:
+            carb_init = st.session_state.get("carb_batch_rows_snapshot", [])
 
         df_c_batch = pd.DataFrame(carb_init) if carb_init else pd.DataFrame(
             columns=["선택", "지점", "측정깊이(mm)", "설계피복(mm)", "실측피복(mm)", "경과년수(년)"])
@@ -2492,11 +2778,13 @@ with tab3:
                 "측정깊이(mm)": st.column_config.NumberColumn("측정깊이(mm)", min_value=0.0, max_value=200.0, step=0.1),
                 "설계피복(mm)": st.column_config.NumberColumn("설계피복(mm)", min_value=10.0, max_value=300.0, step=1.0),
                 "실측피복(mm)": st.column_config.NumberColumn("실측피복(mm)", min_value=0.0, max_value=300.0, step=1.0,
-                                                        help="0이면 설계피복으로 산정"),
+                                                        help="비워두면(미입력) 설계피복으로 산정. 철근 노출 등 실측값이 0mm면 0을 직접 입력."),
                 "경과년수(년)": st.column_config.NumberColumn("경과년수(년)", min_value=1, max_value=200),
             },
-            use_container_width=True, hide_index=True, num_rows="dynamic"
+            use_container_width=True, hide_index=True, num_rows="dynamic",
+            key=f"carb_batch_editor_{st.session_state['carb_grid_ver']}",
         )
+        st.session_state["carb_batch_rows_snapshot"] = edited_carb.to_dict("records")
 
         if st.button("🚀 일괄 평가 실행", type="primary", use_container_width=True, key="btn_carb_batch"):
             res_rows = []
@@ -2506,15 +2794,16 @@ with tab3:
                 try:
                     md = float(row["측정깊이(mm)"])
                     dc = float(row["설계피복(mm)"])
-                    cr = float(row.get("실측피복(mm)", 0) or 0)
+                    cr_raw = row.get("실측피복(mm)", np.nan)
+                    cr = float(cr_raw) if pd.notna(cr_raw) else np.nan
                     ay = int(row["경과년수(년)"])
                     rate_a, rem, _, res_life, grade, _ = _carb_evaluate(md, dc, ay, cr)
                     res_rows.append({
                         "지점": row.get("지점", "P"),
                         "측정깊이(mm)": md,
                         "설계피복(mm)": dc,
-                        "실측피복(mm)": cr if cr else "미측정",
-                        "산정기준피복(mm)": cr if cr else dc,
+                        "실측피복(mm)": cr if pd.notna(cr) else "미측정",
+                        "산정기준피복(mm)": cr if pd.notna(cr) else dc,
                         "경과년수(년)": ay,
                         "잔여피복(mm)": round(rem, 1),
                         "속도계수A": round(rate_a, 3) if rate_a > 0 else 0,
@@ -2763,3 +3052,102 @@ with tab4:
             st.altair_chart(chart + rule, use_container_width=True)
         elif parsed:
             st.warning("최소 2개 이상의 숫자가 필요합니다.")
+
+# ---------------------------------------------------------
+# [Fix B - round 2] 저장/불러오기 패널 내용
+# tab1~tab4가 모두 이번 스크립트 실행에서 렌더링을 마친 뒤 실행되므로,
+# build_checkpoint_payload가 읽는 carb_batch_rows_snapshot 등은 항상 이번 실행
+# 기준 최신값이다. 화면 위치는 위에서 미리 만들어 둔 checkpoint_panel 컨테이너가
+# 담당하므로(탭보다 위쪽), 사용자에게는 여전히 탭 위에 패널이 보인다.
+# ---------------------------------------------------------
+with checkpoint_panel:
+    cp_col1, cp_col2, cp_col3 = st.columns([1, 1, 2])
+
+    _current_payload = build_checkpoint_payload(st.session_state)
+    _current_hash = _checkpoint_state_hash(_current_payload)
+
+    with cp_col1:
+        _checkpoint_json = json.dumps(_current_payload, ensure_ascii=False, indent=2)
+        _safe_proj_name = re.sub(r'[\\/*?:"<>|]', "_", st.session_state.get("proj_name", "") or "프로젝트")
+        _checkpoint_filename = f"{_safe_proj_name}_진행상황_{datetime.now().strftime('%Y%m%d_%H%M')}.json"
+        if st.download_button(
+            "💾 진행상황 저장",
+            data=_checkpoint_json.encode("utf-8"),
+            file_name=_checkpoint_filename,
+            mime="application/json",
+            use_container_width=True,
+        ):
+            st.session_state["_checkpoint_saved_hash"] = _current_hash
+
+    with cp_col2:
+        _checkpoint_file = st.file_uploader(
+            "📂 불러오기", type=["json"], key="checkpoint_uploader"
+        )
+
+    with cp_col3:
+        _saved_hash = st.session_state.get("_checkpoint_saved_hash")
+        _has_data = bool(st.session_state.get("rebound_records")) or bool(
+            st.session_state.get("carb_batch_rows_snapshot")
+        )
+        if _saved_hash is None:
+            if _has_data:
+                st.caption("이번 세션에서 아직 저장하지 않았습니다.")
+        elif _current_hash != _saved_hash:
+            st.caption("⚠ 마지막 저장 이후 변경사항이 있습니다.")
+
+if _checkpoint_file is not None:
+    _upload_sig = (_checkpoint_file.name, _checkpoint_file.size)
+    if st.session_state.get("_checkpoint_upload_sig") != _upload_sig:
+        st.session_state["_checkpoint_upload_sig"] = _upload_sig
+        try:
+            _payload = json.loads(_checkpoint_file.getvalue().decode("utf-8"))
+            _pending_updates = apply_checkpoint_payload(_payload)
+        except (ValueError, json.JSONDecodeError, UnicodeDecodeError) as e:
+            st.session_state["_checkpoint_load_error"] = str(e)
+            st.session_state["_checkpoint_pending_restore"] = None
+        else:
+            st.session_state["_checkpoint_load_error"] = None
+            st.session_state["_checkpoint_pending_restore"] = {
+                "updates": _pending_updates,
+                "project_name": _payload.get("project_name", ""),
+                "n_records": len(_payload.get("rebound", {}).get("records", [])),
+                "saved_at": _payload.get("saved_at", "알 수 없음"),
+            }
+
+if st.session_state.get("_checkpoint_load_error"):
+    with checkpoint_msg:
+        st.error(f"불러오기 실패: {st.session_state['_checkpoint_load_error']}")
+
+_pending_restore = st.session_state.get("_checkpoint_pending_restore")
+if _pending_restore:
+    @st.dialog("진행상황 불러오기 확인")
+    def _confirm_checkpoint_restore():
+        st.write(
+            f"**불러올 파일:** {_pending_restore['project_name']} · "
+            f"지점 {_pending_restore['n_records']}개 · "
+            f"저장 시각 {_pending_restore['saved_at']}"
+        )
+        st.warning("지금 화면의 작업 중인 내용은 사라집니다.")
+        dlg_col1, dlg_col2 = st.columns(2)
+        if dlg_col1.button("예, 불러오기", type="primary", use_container_width=True):
+            for _k, _v in _pending_restore["updates"].items():
+                # carb_cover_real은 None이 "실측 미입력"이라는 유효한 의미를 갖는 값이므로 예외로 둔다.
+                # 그 외 필드는 저장 시점에 아직 렌더링되지 않아 None으로 기록된 값일 수 있어,
+                # 그대로 덮어쓰면 이후 계산에서 TypeError가 발생할 수 있으므로 건너뛴다.
+                if _v is None and _k != "carb_cover_real":
+                    continue
+                st.session_state[_k] = _v
+            st.session_state["last_added_signature"] = None
+            st.session_state["last_add_message"] = None
+            st.session_state["reb_grid_ver"] = st.session_state.get("reb_grid_ver", 0) + 1
+            st.session_state["last_rebound_result"] = None
+            st.session_state["last_rebound_meta"] = {}
+            st.session_state["last_rebound_error"] = None
+            st.session_state["_checkpoint_saved_hash"] = None
+            st.session_state["_checkpoint_pending_restore"] = None
+            st.rerun()
+        if dlg_col2.button("취소", use_container_width=True):
+            st.session_state["_checkpoint_pending_restore"] = None
+            st.rerun()
+
+    _confirm_checkpoint_restore()
