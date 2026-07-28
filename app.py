@@ -111,12 +111,6 @@ st.markdown("""
     }
     .workflow-arrow { align-self: center; color: var(--primary); font-weight: 900; padding: 0 2px; }
 
-    .home-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; margin: 12px 0 18px 0; }
-    .home-card { background: var(--card); border: 1px solid var(--border); border-radius: 16px; padding: 16px 18px; box-shadow: 0 8px 18px rgba(15, 76, 129, 0.05); }
-    .home-card-title { color: var(--text-sub); font-size: 0.88rem; margin-bottom: 6px; }
-    .home-card-value { color: var(--text-main); font-size: 1.55rem; font-weight: 900; }
-    .home-card-sub { color: var(--text-sub); font-size: 0.82rem; margin-top: 4px; }
-
     .step-title { margin: 10px 0; padding: 12px 14px; border-radius: 14px; border: 1px solid #dbeafe; background: linear-gradient(90deg, #eff6ff 0%, #ffffff 100%); }
     .step-title b { color: var(--primary); font-size: 1.08rem; }
     .step-title span { display: block; margin-top: 3px; color: var(--text-sub); font-size: 0.9rem; line-height: 1.5; }
@@ -137,14 +131,6 @@ st.markdown("""
     .recommend-main { color: #14532d; font-size: 1.9rem; font-weight: 900; margin-top: 4px; }
     .recommend-sub { color: #475569; font-size: 0.92rem; margin-top: 4px; line-height: 1.5; }
 
-    .download-panel { border: 1px solid var(--border); border-radius: 16px; background: #ffffff; padding: 14px; margin-top: 10px; }
-
-    /* 기존 판정/계산 박스 (호환 유지) */
-    .verdict-card { border: 1px solid rgba(127,127,127,0.18); border-radius: 14px; padding: 18px 20px; margin: 6px 0 14px; background: rgba(127,127,127,0.04); }
-    .verdict-badge { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; font-weight: 600; padding: 5px 12px; border-radius: 8px; margin-bottom: 10px; }
-    .verdict-num { font-size: 50px; font-weight: 700; line-height: 1; font-variant-numeric: tabular-nums; }
-    .verdict-sub { font-size: 13px; color: rgba(127,127,127,0.95); }
-    .calc-box { background-color: rgba(127,127,127,0.06); padding: 15px; border-radius: 10px; border-left: 5px solid var(--primary); margin-bottom: 15px; }
     div[data-testid="stTable"] { overflow-x: auto; }
 
     /* expander 헤더 정렬 + 모바일 아이콘 텍스트 노출 보정 (기존 유지) */
@@ -164,7 +150,6 @@ st.markdown("""
         .workflow-wrap { display: block; }
         .workflow-step { margin-bottom: 8px; }
         .workflow-arrow { text-align: center; padding: 2px 0; }
-        .home-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
         .result-hero { grid-template-columns: 1fr; }
     }
     @media (max-width: 768px) {
@@ -172,10 +157,8 @@ st.markdown("""
         [data-testid="stHeader"] { height: 0 !important; }
         .block-container { padding-top: 0.5rem !important; }
         div[data-testid="stExpander"] details > summary { padding-left: 10px !important; }
-        .verdict-num { font-size: 42px; }
     }
     @media (max-width: 520px) {
-        .home-grid { grid-template-columns: 1fr; }
         .app-hero-title { font-size: 1.35rem; }
         .result-value { font-size: 1.45rem; }
     }
@@ -1250,7 +1233,7 @@ def generate_pdf_report(project_name, report_type, summary_dict, detail_df=None,
         td.setStyle(TableStyle([
             ('FONTNAME', (0, 0), (-1, -1), font_name),
             ('FONTSIZE', (0, 0), (-1, -1), 7.5),
-            ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor("#137DA1")),
+            ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor("#0F4C81")),
             ('TEXTCOLOR', (0, 0), (-1, 0), colors.white),
             ('GRID', (0, 0), (-1, -1), 0.3, colors.grey),
             ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
@@ -2106,8 +2089,8 @@ with tab2:
                         cells_html += (
                             "<div style='position:relative;padding:9px 0;text-align:center;"
                             "font-size:17px;font-weight:600;font-variant-numeric:tabular-nums;"
-                            "background:rgba(214,40,40,0.14);border:1.5px solid #D62828;"
-                            "border-radius:8px;color:#D62828;'>"
+                            "background:rgba(220,38,38,0.14);border:1.5px solid #DC2626;"
+                            "border-radius:8px;color:#DC2626;'>"
                             f"{v_txt}<span style='position:absolute;top:2px;right:5px;"
                             "font-size:10px;'>⚠</span></div>"
                         )
@@ -2298,14 +2281,14 @@ with tab2:
                 x=alt.X('강도:Q', title='추정강도 (MPa)'),
             )
             bars = base_chart.mark_bar(cornerRadiusEnd=3, height=24).encode(
-                color=alt.condition(alt.datum.강도 >= result_fck, alt.value('#1B9E77'), alt.value('#D62828')),
+                color=alt.condition(alt.datum.강도 >= result_fck, alt.value('#16A34A'), alt.value('#DC2626')),
                 tooltip=[alt.Tooltip('공식:N'), alt.Tooltip('강도:Q', format='.2f', title='강도(MPa)')]
             )
             value_labels = base_chart.mark_text(align='left', baseline='middle', dx=5, fontWeight='bold').encode(
                 text=alt.Text('강도:Q', format='.1f')
             )
             rule_chart = alt.Chart(pd.DataFrame({'x': [result_fck]})).mark_rule(
-                color='#D62828', strokeDash=[5, 3], size=2).encode(x='x:Q')
+                color='#DC2626', strokeDash=[5, 3], size=2).encode(x='x:Q')
 
             st.altair_chart((bars + rule_chart + value_labels).properties(height=260), use_container_width=True)
 
@@ -2674,9 +2657,9 @@ with tab3:
                     y=alt.Y('탄산화깊이', title='탄산화 깊이 (mm)')
                 )
                 rule = alt.Chart(pd.DataFrame({'y': [cover_eff]})).mark_rule(
-                    color='#D62828', strokeDash=[5, 5], size=2).encode(y='y')
+                    color='#DC2626', strokeDash=[5, 5], size=2).encode(y='y')
                 point = alt.Chart(pd.DataFrame({'x': [a_years], 'y': [m_depth]})).mark_point(
-                    color='#F4A100', size=100, filled=True).encode(x='x', y='y')
+                    color='#F59E0B', size=100, filled=True).encode(x='x', y='y')
                 st.altair_chart(line + rule + point, use_container_width=True)
 
             with st.expander("📄 PDF 보고서 다운로드", expanded=False):
@@ -2826,7 +2809,7 @@ with tab3:
                             y="건수:Q",
                             color=alt.Color("등급:N", scale=alt.Scale(
                                 domain=["A", "B", "C", "D"],
-                                range=["#2ecc71", "#3498db", "#f39c12", "#e74c3c"]))
+                                range=["#16A34A", "#2563EB", "#F59E0B", "#DC2626"]))
                         ).properties(height=250, title="등급별 분포"),
                         use_container_width=True
                     )
@@ -2957,8 +2940,8 @@ with tab4:
                     y=alt.Y("변동계수CV(%):Q"),
                     color=alt.condition(
                         alt.datum["공식"] == best["공식"],
-                        alt.value("#1B9E77"),
-                        alt.value("#95a5a6")
+                        alt.value("#16A34A"),
+                        alt.value("#64748B")
                     )
                 ).properties(height=280, title="공식별 변동계수 비교 (낮을수록 안정적)")
                 st.altair_chart(cv_chart, use_container_width=True)
@@ -2974,7 +2957,7 @@ with tab4:
                     tooltip=["지점", "공식", "강도"]
                 ).properties(height=300, title="지점별 공식 결과 분포")
                 fck_rule = alt.Chart(pd.DataFrame({"y": [st_fck]})).mark_rule(
-                    color="#D62828", strokeDash=[5, 3]).encode(y="y")
+                    color="#DC2626", strokeDash=[5, 3]).encode(y="y")
                 st.altair_chart(point_chart + fck_rule, use_container_width=True)
 
                 with st.expander("📄 통계·비교 PDF 보고서 다운로드", expanded=False):
@@ -3046,9 +3029,9 @@ with tab4:
 
             chart = alt.Chart(pd.DataFrame({"번호": range(1, len(data) + 1), "강도": data})).mark_bar().encode(
                 x='번호:O', y='강도:Q',
-                color=alt.condition(alt.datum.강도 >= st_fck, alt.value('#1B9E77'), alt.value('#D62828'))
+                color=alt.condition(alt.datum.강도 >= st_fck, alt.value('#16A34A'), alt.value('#DC2626'))
             )
-            rule = alt.Chart(pd.DataFrame({'y': [st_fck]})).mark_rule(color='#D62828', strokeDash=[5, 3], size=2).encode(y='y')
+            rule = alt.Chart(pd.DataFrame({'y': [st_fck]})).mark_rule(color='#DC2626', strokeDash=[5, 3], size=2).encode(y='y')
             st.altair_chart(chart + rule, use_container_width=True)
         elif parsed:
             st.warning("최소 2개 이상의 숫자가 필요합니다.")
