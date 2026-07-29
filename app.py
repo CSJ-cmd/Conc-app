@@ -12,7 +12,6 @@ import hashlib
 import html
 import json
 from datetime import datetime, timezone, timedelta
-from PIL import Image
 
 logger = logging.getLogger(__name__)
 
@@ -875,57 +874,6 @@ def get_recommended_formula_description(design_fck):
     return f"{range_label}: {', '.join(formulas)}"
 
 
-@st.cache_resource
-def load_ocr_model():
-    import easyocr
-    return easyocr.Reader(['en'], gpu=False)
-
-
-def _normalize_ocr_token(text):
-    text = str(text)
-    text = re.sub(r'(?<=\d),(?=\d{3}(?:\D|$))', '', text)
-    replacements = {
-        'O': '0', 'o': '0',
-        'I': '1', 'l': '1', '|': '1',
-        ',': '.', ';': '.',
-    }
-    for src, dst in replacements.items():
-        text = text.replace(src, dst)
-    return text.strip()
-
-
-def _extract_numeric_candidates(ocr_result):
-    candidates = []
-    for item in ocr_result:
-        if len(item) < 3:
-            continue
-        bbox, raw_text, conf = item
-        text = _normalize_ocr_token(str(raw_text))
-        nums = re.findall(r'\d+(?:\.\d+)?', text)
-        if not nums:
-            continue
-
-        ys = [pt[1] for pt in bbox]
-        xs = [pt[0] for pt in bbox]
-        y_center = float(sum(ys) / len(ys))
-        x_center = float(sum(xs) / len(xs))
-        h = float(max(ys) - min(ys)) if ys else 0.0
-
-        for num in nums:
-            try:
-                val = float(num)
-                candidates.append({
-                    "value": val,
-                    "x": x_center,
-                    "y": y_center,
-                    "h": h,
-                    "conf": float(conf),
-                })
-            except Exception:
-                continue
-    return candidates
-
-
 def _cluster_rows(candidates):
     if not candidates:
         return []
@@ -950,43 +898,6 @@ def _cluster_rows(candidates):
     for row in rows:
         row.sort(key=lambda c: c["x"])
     return rows
-
-
-def _select_best_20_readings(ocr_result, target_count=20):
-    candidates = _extract_numeric_candidates(ocr_result)
-    if not candidates:
-        return []
-
-    plausible = [c for c in candidates if 10 <= c["value"] <= 100]
-    work = plausible if plausible else candidates
-
-    rows = _cluster_rows(work)
-    if not rows:
-        return []
-
-    measurement_rows = [r for r in rows if len(r) >= 3]
-    if measurement_rows:
-        selected_rows = measurement_rows[-max(4, min(6, len(measurement_rows))):]
-    else:
-        selected_rows = rows
-
-    ordered_values = [c["value"] for row in selected_rows for c in row]
-    ordered_keys = {(c["x"], c["y"], c["value"]) for row in selected_rows for c in row}
-
-    if len(ordered_values) >= target_count:
-        return ordered_values[:target_count]
-
-    remain = [
-        c["value"]
-        for c in sorted(work, key=lambda c: (c["y"], c["x"]))
-        if (c["x"], c["y"], c["value"]) not in ordered_keys
-    ]
-    merged = []
-    for v in ordered_values + remain:
-        if len(merged) >= target_count:
-            break
-        merged.append(v)
-    return merged
 
 
 def _format_readings_for_text(values):
@@ -1018,24 +929,6 @@ def parse_readings_text(raw_text):
         return []
 
     tokens = re.findall(r'[-+]?(?:\d+(?:\.\d*)?|\.\d+)', text)
-
-    vals = []
-    for token in tokens:
-        try:
-            value = float(token)
-        except (TypeError, ValueError):
-            continue
-        if np.isfinite(value):
-            vals.append(value)
-    return vals
-
-
-def parse_ocr_readings_text(raw_text):
-    if raw_text is None:
-        return []
-
-    normalized = _normalize_ocr_token(str(raw_text))
-    tokens = re.findall(r'[-+]?(?:\d+(?:\.\d*)?|\.\d+)', normalized)
 
     vals = []
     for token in tokens:
@@ -1190,105 +1083,6 @@ def validate_rebound_inputs(
         "core_coeff": ct_num,
         "selected_formulas": normalized_formulas,
     }
-
-
-def extract_numbers_from_image(image_input, ocr_mode="정밀"):
-    try:
-        import cv2
-
-        if isinstance(image_input, Image.Image):
-            image = image_input.copy()
-        else:
-            image = Image.open(image_input)
-
-        if image.mode not in ("RGB", "RGBA", "L"):
-            image = image.convert("RGB")
-
-        max_width = 800
-        if image.width > max_width:
-            ratio = max_width / float(image.width)
-            new_height = int((float(image.height) * float(ratio)))
-            resample = Image.Resampling.LANCZOS if hasattr(Image, "Resampling") else Image.LANCZOS
-            image = image.resize((max_width, new_height), resample)
-
-        image_np = np.array(image)
-
-        if image_np.ndim == 2:
-            gray = image_np
-        elif image_np.shape[2] == 4:
-            gray = cv2.cvtColor(image_np, cv2.COLOR_RGBA2GRAY)
-        else:
-            gray = cv2.cvtColor(image_np, cv2.COLOR_RGB2GRAY)
-
-        blur = cv2.medianBlur(gray, 3)
-
-        clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8)).apply(gray)
-        th_adapt = cv2.adaptiveThreshold(
-            blur, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
-            cv2.THRESH_BINARY, 11, 2
-        )
-        _, th_otsu = cv2.threshold(blur, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
-        _, th_clahe_otsu = cv2.threshold(clahe, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
-        morph = cv2.morphologyEx(th_adapt, cv2.MORPH_CLOSE, np.ones((2, 2), np.uint8), iterations=1)
-
-        if ocr_mode == "빠른":
-            variants = [gray, th_adapt]
-        else:
-            variants = [gray, th_adapt, th_otsu, th_clahe_otsu, morph]
-
-        reader = load_ocr_model()
-
-        best_values = []
-        best_score = -1e9
-
-        for processed in variants:
-            result_detail = reader.readtext(
-                processed,
-                detail=1,
-                paragraph=False,
-                allowlist='0123456789.:- '
-            )
-            values = _select_best_20_readings(result_detail, target_count=20)
-
-            score = len(values) * 5
-            if len(values) >= 20:
-                score += 100
-            in_range = sum(1 for v in values if 10 <= v <= 100)
-            score += in_range * 2
-
-            confs = [float(item[2]) for item in result_detail if len(item) >= 3]
-            if confs:
-                score += float(np.mean(confs)) * 10
-
-            if score > best_score:
-                best_score = score
-                best_values = values
-
-        if not best_values:
-            fallback = reader.readtext(gray, detail=0, allowlist='0123456789. ')
-            fallback_nums = []
-            for token in fallback:
-                nums = re.findall(r'\d+(?:\.\d+)?', _normalize_ocr_token(str(token)))
-                for n in nums:
-                    try:
-                        fallback_nums.append(float(n))
-                    except Exception:
-                        pass
-            best_values = fallback_nums[:20]
-
-        return _format_readings_for_text(best_values)
-
-    except ImportError as e:
-        # [수정 #2] easyocr / opencv-python 등 OCR 의존성 미설치를 일반 오류와 분리.
-        # 로그만 봐도 '라이브러리 누락'인지 '이미지 처리 실패'인지 즉시 구분됩니다.
-        logger.error(
-            "OCR 의존성 미설치로 숫자 인식을 건너뜁니다 "
-            "(pip install easyocr opencv-python-headless): %s", e
-        )
-        return ""
-    except Exception as e:
-        logger.exception("OCR 처리 중 오류 발생: %s", e)
-        return ""
 
 
 def get_angle_correction(R_val, angle):
@@ -2141,147 +1935,10 @@ with tab2:
     if mobile_client:
         st.caption("📱 모바일/태블릿 최적화 모드")
 
-    mode = st.radio("입력 방식", ["단일 지점 (카메라/파일)", "다중 지점 (엑셀 업로드)"], horizontal=True)
+    mode = st.radio("입력 방식", ["단일 지점 (직접 입력)", "다중 지점 (엑셀 업로드)"], horizontal=True)
 
     if mode.startswith("단일"):
-        with st.expander("🟦 1단계 · 측정값 확보 (촬영·OCR·붙여넣기)", expanded=False):
-            st.markdown("##### 📸 측정값 입력")
-
-            ocr_mode = st.radio(
-                "OCR 처리 모드",
-                ["빠른", "정밀"],
-                horizontal=not mobile_client,
-                index=1,
-                help="빠른: 처리속도 우선 / 정밀: 인식률 우선"
-            )
-
-            cam_mode = st.toggle("💻 웹캠(PC) 모드로 전환하기", value=False)
-
-            img_file = None
-            rot_val = 0
-
-            if not cam_mode:
-                st.caption("📱 모바일: '사진 촬영' 선택 시 **후면 카메라(고화질/자동초점)**가 실행됩니다.")
-                img_file = st.file_uploader("촬영 버튼 또는 갤러리 선택", type=['png', 'jpg', 'jpeg', 'bmp'])
-            else:
-                st.caption("💡 PC/노트북 웹캠을 사용할 때 적합합니다.")
-                img_file = st.camera_input("측정 기록표를 촬영하세요")
-
-            if img_file:
-                st.caption("이미지가 회전되어 보이면 아래에서 회전값을 조정하세요. 회전값이 바뀌면 OCR을 다시 실행합니다.")
-                rot_val = st.radio("이미지 회전(반시계)", [0, 90, 180, 270], index=0, horizontal=True, key="img_rot")
-
-            if img_file is not None:
-                file_bytes = None
-                file_hash = ""
-                file_size = getattr(img_file, "size", 0)
-
-                try:
-                    file_bytes = img_file.getvalue()
-                    file_size = len(file_bytes)
-                    file_hash = hashlib.blake2b(file_bytes, digest_size=8).hexdigest()
-                except Exception:
-                    file_hash = ""
-
-                try:
-                    upload_sig = (
-                        getattr(img_file, "name", ""),
-                        file_size,
-                        file_hash,
-                        rot_val,
-                        ocr_mode,
-                        cam_mode,
-                    )
-                except Exception:
-                    upload_sig = (
-                        str(img_file),
-                        file_hash,
-                        rot_val,
-                        ocr_mode,
-                        cam_mode,
-                    )
-
-                sig_changed = st.session_state.get("ocr_upload_sig") != upload_sig
-
-                if sig_changed:
-                    st.session_state["ocr_upload_sig"] = upload_sig
-                    st.session_state.pop("ocr_result", None)
-                    st.session_state.pop("ocr_error", None)
-                    st.session_state.pop("ocr_processed_sig", None)
-
-                rerun_ocr = st.button(
-                    "🔁 OCR 다시 실행",
-                    key="btn_rerun_ocr",
-                    use_container_width=True,
-                    help="이미지, 회전값, OCR 모드는 그대로 두고 숫자 인식만 다시 실행합니다."
-                )
-
-                should_run_ocr = (
-                    rerun_ocr
-                    or st.session_state.get("ocr_processed_sig") != upload_sig
-                )
-
-                if should_run_ocr:
-                    st.session_state["ocr_processed_sig"] = upload_sig
-
-                    with st.spinner("이미지 처리 및 숫자 인식 중..."):
-                        recognized_text = ""
-
-                        try:
-                            if file_bytes is not None:
-                                image_source = io.BytesIO(file_bytes)
-                            else:
-                                try:
-                                    img_file.seek(0)
-                                except Exception:
-                                    pass
-                                image_source = img_file
-
-                            pil_image = Image.open(image_source)
-
-                            if rot_val != 0:
-                                pil_image = pil_image.rotate(rot_val, expand=True)
-
-                            recognized_text = extract_numbers_from_image(
-                                pil_image,
-                                ocr_mode=ocr_mode
-                            )
-
-                        except Exception as e:
-                            logger.exception("OCR 실행 중 오류 발생: %s", e)
-                            recognized_text = ""
-                            st.session_state["ocr_error"] = (
-                                "OCR 처리 중 오류가 발생했습니다. "
-                                "이미지를 다시 업로드하거나 직접 입력해주세요."
-                            )
-
-                        if recognized_text:
-                            st.session_state["ocr_result"] = recognized_text
-                            st.session_state.pop("ocr_error", None)
-                        else:
-                            st.session_state.pop("ocr_result", None)
-                            if "ocr_error" not in st.session_state:
-                                st.session_state["ocr_error"] = (
-                                    "숫자를 인식하지 못했습니다. 직접 입력해주세요."
-                                )
-
-                recognized_text = st.session_state.get("ocr_result", "")
-
-                if recognized_text:
-                    ocr_vals = parse_readings_text(recognized_text)
-
-                    if should_run_ocr:
-                        st.success(f"인식 성공 ({len(ocr_vals)}개): {recognized_text}")
-                    else:
-                        st.info(f"저장된 OCR 결과 사용 중 ({len(ocr_vals)}개): {recognized_text}")
-
-                    if len(ocr_vals) != 20:
-                        st.warning("자동 인식값이 20개가 아닙니다. 아래 입력판에서 확인/수정 후 계산하세요.")
-
-                elif st.session_state.get("ocr_error"):
-                    st.warning(st.session_state["ocr_error"])
-
-        with st.expander("⚙️ 2단계 · 보정조건 (방향·재령·강도·정책·공식)", expanded=True):
+        with st.expander("⚙️ 1단계 · 보정조건 (방향·재령·강도·정책·공식)", expanded=True):
             # ---- 입력 파라미터: 모바일은 단일 컬럼, 데스크톱은 4열 ----
             if mobile_client:
                 angle = st.selectbox(
@@ -2375,7 +2032,7 @@ with tab2:
                 else:
                     st.warning("직접 선택 모드에서는 평균 산정에 사용할 공식을 1개 이상 선택하세요.")
 
-        with st.expander("✍️ 3단계 · 측정값 격자 입력 (실시간 기각 확인)", expanded=False):
+        with st.expander("✍️ 2단계 · 측정값 입력 (텍스트·격자)", expanded=False):
             # ============ 측정값 입력판 (격자형 + 실시간 기각 미리보기) ============
             GRID_COLS = 5  # 현장 측정 기록표와 동일한 5칸 가로 배열
 
@@ -2387,15 +2044,7 @@ with tab2:
             if 'reb_grid_ver' not in st.session_state:
                 st.session_state['reb_grid_ver'] = 0
 
-            # OCR 인식 결과가 새로 들어오면 텍스트칸·격자에 즉시 반영(중복 적용 방지)
-            _ocr_txt = st.session_state.get('ocr_result')
-            if _ocr_txt and st.session_state.get('reb_ocr_applied') != _ocr_txt:
-                st.session_state['reb_src_txt'] = _ocr_txt
-                st.session_state['reb_paste_area'] = _ocr_txt
-                st.session_state['reb_grid_ver'] = st.session_state.get('reb_grid_ver', 0) + 1
-                st.session_state['reb_ocr_applied'] = _ocr_txt
-
-            # [중첩 expander 금지] 3단계 expander 안이므로 내부는 일반 블록으로 표시
+            # [중첩 expander 금지] 2단계 expander 안이므로 내부는 일반 블록으로 표시
             st.markdown("###### 📋 텍스트로 붙여넣기 / 한 번에 수정")
             st.text_area(
                 "측정값 (공백·쉼표·줄바꿈으로 구분, 소수점은 58.4처럼 점 사용)",
@@ -3150,8 +2799,8 @@ with tab3:
             # 같은 UploadedFile을 truthy로 계속 반환한다. 서명 가드 없이 매번 재파싱 +
             # carb_grid_ver 증가를 하면, 업로드 이후 사용자가 그리드를 아무리 편집해도
             # 다음 rerun마다 위젯 key가 바뀌어 편집 내용이 사라진다(그리드가 사실상
-            # 읽기 전용이 됨). 체크포인트 업로더(_checkpoint_upload_sig)·OCR 업로더
-            # (ocr_upload_sig)와 동일한 패턴으로, 서명이 실제로 바뀐 경우에만 재파싱한다.
+            # 읽기 전용이 됨). 체크포인트 업로더(_checkpoint_upload_sig)와 동일한
+            # 패턴으로, 서명이 실제로 바뀐 경우에만 재파싱한다.
             carb_upload_sig = (carb_file.name, carb_file.size)
             if st.session_state.get("carb_file_upload_sig") != carb_upload_sig:
                 st.session_state["carb_file_upload_sig"] = carb_upload_sig
